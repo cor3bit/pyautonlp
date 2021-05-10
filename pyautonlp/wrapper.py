@@ -1,7 +1,7 @@
 from typing import Callable
 
-from constants import SolverType
-
+from .constants import SolverType
+from .fom.gd import gd
 
 def solve(
         obj_func: Callable,
@@ -10,7 +10,10 @@ def solve(
 ):
     # TODO redirect to solvers based on solver id
     if solver == SolverType.GD:
-        raise NotImplementedError
+        return gd(
+            obj_func=obj_func,
+            **kwargs,
+        )
     elif solver == SolverType.NEWTON:
         raise NotImplementedError
     elif solver == SolverType.HJB:

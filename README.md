@@ -1,4 +1,4 @@
-## PyAutoNLP - Solving NLP problems with PyTorch autodiff backend
+## PyAutoNLP - Solving NLP problems with JAX autodiff backend
 
 
 ### Usage
@@ -40,3 +40,4 @@ Currently the following methods are supported:
    Tim A. Wheeler, MIT Press, 2019.
 3. Optimal Control Theory - Suresh P. Sethi, 
 Springer, 2019.
+4. JAX: Autograd and XLA. Web: https://github.com/google/jax

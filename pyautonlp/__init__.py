@@ -1,1 +1,1 @@
-from wrapper import solve
+from .wrapper import solve
