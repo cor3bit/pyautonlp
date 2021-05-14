@@ -9,13 +9,28 @@
 $ pip install -r requirements.txt
 ```
 
-- Specify the problem:
+- Specify the problem using `jax.numpy` arrays:
 
-TODO
+```python
+import jax.numpy as jnp
 
-- Run the solver:
+def poly2(x):
+    # z = x^2 + y^2
+    return jnp.sum(x * x)
+```
 
-TODO
+- Select a solver and run PyAutoNLP `solve()` method:
+
+```python
+import pyautonlp as pan
+
+sln, info = pan.solve(
+    poly2,
+    solver='newton',
+    guess=(4., 4.),
+    learning_rate=0.1,
+)
+```
 
 
 ### Supported Solvers

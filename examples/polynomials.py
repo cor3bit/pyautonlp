@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
 import pyautonlp as pan
-
+from pyautonlp.constants import SolverType
 
 def poly2(x):
     # z = x^2 + y^2
@@ -9,11 +9,26 @@ def poly2(x):
 
 
 if __name__ == '__main__':
-    res = pan.solve(
+    # Gradient Descent solver
+    print(f'\nRunning {SolverType.GD} solver.')
+    sln, info = pan.solve(
         poly2,
         solver='gd',
         guess=(4., 4.),
         learning_rate=0.1,
     )
 
-    print(res)
+    print(sln)
+    print(info)
+
+    # Newton's Method solver
+    print(f'\nRunning {SolverType.NEWTON} solver.')
+    sln, info = pan.solve(
+        poly2,
+        solver='newton',
+        guess=(4., 4.),
+        learning_rate=1.0,
+    )
+
+    print(sln)
+    print(info)

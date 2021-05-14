@@ -9,8 +9,6 @@ def gd(
         max_iter=500,
         convergence=(10, 1e-6),
 ):
-    # TODO check that calc is running on GPU
-
     # TODO check if guess is empty
     assert guess is not None
     x_curr = jnp.array(guess, dtype=jnp.float32)
