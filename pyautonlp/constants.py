@@ -10,3 +10,22 @@ class SolverType:
     PMP = 'pmp'
     DP = 'dp'
     DOC = 'doc'
+
+
+class HessianApprox:
+    EXACT = 'Exact'
+    QN = 'Quasi-Newton'
+    GN = 'Gauss-Newton'
+    BFGS = 'BFGS'
+
+
+class ConvergenceCriteria:
+    KKT_VIOLATION = 'Gradient Norm'
+    STEP_DIFF_NORM = 'Step Difference Norm'
+
+
+class LearningRateStrategy:
+    CONST = 'Constant'
+    BT = 'Backtracking'
+    BT_ARMIJO = 'Backtracking + Armijo'
+    BT_WOLFE = 'Backtracking + Wolfe'

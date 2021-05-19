@@ -3,7 +3,7 @@ from jax import grad, jit, vmap
 
 
 def gd(
-        obj_func,
+        loss_fn,
         guess=None,
         learning_rate=None,
         max_iter=500,
@@ -13,14 +13,16 @@ def gd(
     assert guess is not None
     x_curr = jnp.array(guess, dtype=jnp.float32)
 
-    obj_func_dx = grad(obj_func)
+    # precompile Jacobian
+    loss_grad_fn = grad(loss_fn)
 
+    # run iteration loop
     converged = False
     convergence_n, convergence_eps = convergence
     n_iter = 0
     n_small_diffs_in_a_row = 0
     while (not converged) and (n_iter < max_iter):
-        direction = obj_func_dx(x_curr)
+        direction = loss_grad_fn(x_curr)
         x_next = x_curr - learning_rate * direction
 
         # check convergence

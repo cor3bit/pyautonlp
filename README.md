@@ -26,7 +26,7 @@ import pyautonlp as pan
 
 sln, info = pan.solve(
     poly2,
-    solver='newton',
+    solver_type='newton',
     guess=(4., 4.),
     learning_rate=0.1,
 )

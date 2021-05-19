@@ -1,33 +1,38 @@
-from typing import Callable
+from typing import Callable, Tuple
+
+import jax.numpy as jnp
 
 from .constants import SolverType
 from .fom.gd import gd
 from .som.newton import newton
+from .constr.constr_newton import ConstrainedNewtonSolver
 
 
 def solve(
-        obj_func: Callable,
-        solver: str,
+        loss_fn: Callable,
+        solver_type: str,
         **kwargs,
-):
+) -> Tuple[jnp.ndarray, Tuple]:
+    # TODO wrap in try-catch for error handling
+
     # Redirect to particular solver based on a solver id string
-    if solver == SolverType.GD:
-        return gd(
-            obj_func=obj_func,
-            **kwargs,
-        )
-    elif solver == SolverType.NEWTON:
-        return newton(
-            obj_func=obj_func,
-            **kwargs,
-        )
-    elif solver == SolverType.HJB:
+    # solver = None
+    if solver_type == SolverType.GD:
+        return gd(loss_fn=loss_fn, **kwargs)
+    elif solver_type == SolverType.NEWTON:
+        if 'eq_constr' in kwargs or 'ineq_constr' in kwargs:
+            solver = ConstrainedNewtonSolver(loss_fn=loss_fn, **kwargs)
+        else:
+            return newton(loss_fn=loss_fn, **kwargs)
+    elif solver_type == SolverType.HJB:
         raise NotImplementedError
-    elif solver == SolverType.PMP:
+    elif solver_type == SolverType.PMP:
         raise NotImplementedError
-    elif solver == SolverType.DP:
+    elif solver_type == SolverType.DP:
         raise NotImplementedError
-    elif solver == SolverType.DOC:
+    elif solver_type == SolverType.DOC:
         raise NotImplementedError
     else:
-        raise ValueError(f'Unrecognized solver type: {solver}.')
+        raise ValueError(f'Unrecognized solver type: {solver_type}.')
+
+    return solver.solve()
