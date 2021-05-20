@@ -27,7 +27,7 @@ if __name__ == '__main__':
         guess=(0, 1),
         hessian_approx=HessianApprox.EXACT,
         conv_criteria=ConvergenceCriteria.KKT_VIOLATION,
-        lr_strategy=LearningRateStrategy.CONST,
+        lr_strategy=LearningRateStrategy.BT_ARMIJO,
         lr=0.1,
 
         # level of details

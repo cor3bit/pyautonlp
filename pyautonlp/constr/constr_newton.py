@@ -22,7 +22,7 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             gamma: float = 0.1,  # relevant if lr strategy is Backtracking
             beta: float = 0.5,  # relevant if lr strategy is Backtracking
             sigma: float = 1.0,  # merit function parameter
-            max_iter: int = 500,
+            max_iter: int = 200,
             conv_criteria: str = ConvergenceCriteria.KKT_VIOLATION,
             conv_params: Tuple = (10, 1e-4),
             verbose: bool = False,
@@ -66,8 +66,14 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         self._tol = conv_tol
 
         # learning rate
-        # TODO add diff strategies
         self._alpha = lr
+        self._beta = beta
+        self._gamma = gamma
+        self._sigma = sigma
+        self._step_size_fn = self._get_step_size_fn(lr_strategy)
+
+        # save intermediate step info
+        self._cache = []
 
         # grad & hessian functions
         # compile with JAX in advance
@@ -76,7 +82,6 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         self._hess_fn = hessian(self._lagrangian_full)
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
-
         converged = False
         n_iter = 0
 
@@ -85,17 +90,18 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         while not converged and n_iter < self._max_iter:
             # calculate direction
             grad_at_point = self._grad_fn(curr_state)
+            # TODO check H for PD
             hess_at_point = self._hess_fn(curr_state)
             direction = jnp.linalg.solve(hess_at_point, grad_at_point)
 
             # calculate step size (line search)
-            alpha_t = self._alpha
+            step_size = self._step_size_fn(curr_state, direction)
 
             # update state
-            curr_state -= alpha_t * direction
+            curr_state -= step_size * direction
 
             # check convergence
-            converged = self._convergence_fn(grad_at_point, self._tol)
+            converged = self._convergence_fn(grad_at_point=grad_at_point)
 
             # increment params
             n_iter += 1

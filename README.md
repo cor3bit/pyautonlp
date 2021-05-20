@@ -35,24 +35,42 @@ sln, info = pan.solve(
 
 ### Supported Solvers
 
-Currently the following methods are supported:
+The following methods are supported:
 - First Order Methods
     - Gradient Descent (solver id: 'gd')
 - Second Order Methods
     - Newton's method (solver id: 'newton')
-- Optimal Control Methods
+- Constrained Optimization
+    - Newton's method (solver id: 'newton')
+    - SQP (solver id: 'sqp')
+    - IP (solver id: 'ip')
+- Optimal Control
     - HJB (solver id: 'hjb')
     - Pontryagin's method (solver id: 'pmp') 
     - Dynamic Programming (solver id: 'dp')
     - Direct Optimal Control (solver id: 'doc')
 
 
+### Acknowledgements
+
+- The library was developed following Mario Zanon's lectures on 
+Numerical Methods for Optimal Control.
+Web: https://mariozanon.wordpress.com/numerical-methods-for-optimal-control/
+
+- The optimization algorithms are based on JAX auto-diff toolkit. 
+Web: https://github.com/google/jax
+
+- The visualization of the algorithm performance is 
+inspired by Jaewan Yun's library. 
+Web: https://github.com/Jaewan-Yun/optimizer-visualization
+
+
 ### References
 
+More detailed description of the optimization algorithms can be found in 
 1. Numerical Optimization - Jorge Nocedal 
    and Stephen J. Wright, Springer, 2006.
 2. Algorithms for Optimization - Mykel J. Kochenderfer and 
    Tim A. Wheeler, MIT Press, 2019.
 3. Optimal Control Theory - Suresh P. Sethi, 
 Springer, 2019.
-4. JAX: Autograd and XLA. Web: https://github.com/google/jax

@@ -8,7 +8,6 @@ from pyautonlp.solver import Solver
 
 class ConstrainedSolver(Solver):
     _constr_fns = None
-    _x_dims = None
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
         raise NotImplementedError
