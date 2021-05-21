@@ -18,10 +18,10 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             guess: jnp.ndarray = None,
             hessian_approx: str = HessianApprox.EXACT,
             lr_strategy: str = LearningRateStrategy.CONST,
-            lr: float = 0.01,
-            gamma: float = 0.1,  # relevant if lr strategy is Backtracking
+            lr: float = 0.01,  # relevant if lr strategy is Constant
             beta: float = 0.5,  # relevant if lr strategy is Backtracking
-            sigma: float = 1.0,  # merit function parameter
+            gamma: float = 0.1,  # relevant if lr strategy is Backtracking + Armijo
+            sigma: float = 1.0,  # relevant if lr strategy is Backtracking + Merit Function
             max_iter: int = 200,
             conv_criteria: str = ConvergenceCriteria.KKT_VIOLATION,
             conv_params: Tuple = (10, 1e-4),
@@ -41,7 +41,7 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         # TODO move guess to solve()
         assert guess is not None
         self._x_dims = len(guess)
-        self._x0 = jnp.array(guess, dtype=jnp.float32)
+        self._initial_x = jnp.array(guess, dtype=jnp.float32)
 
         self._logger.info(f'Dimensions of the state vector: {self._x_dims}.')
 
@@ -53,11 +53,11 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
         self._eq_constr = eq_constr
         self._constr_fns = eq_constr
-        self._lambda_dims = len(eq_constr)
+        self._multiplier_dims = len(eq_constr)
 
-        self._logger.info(f'Dimensions of the multiplier vector: {self._lambda_dims}.')
+        self._logger.info(f'Dimensions of the multiplier vector: {self._multiplier_dims}.')
 
-        self._lambda0 = jnp.zeros(shape=(self._lambda_dims,), dtype=jnp.float32)
+        self._initial_multipliers = jnp.zeros(shape=(self._multiplier_dims,), dtype=jnp.float32)
 
         # convergence
         conv_n, conv_tol = conv_params
@@ -73,35 +73,62 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         self._step_size_fn = self._get_step_size_fn(lr_strategy)
 
         # save intermediate step info
-        self._cache = []
+        self._cache = {}
 
         # grad & hessian functions
         # compile with JAX in advance
-        # TODO add diff strategies
-        self._grad_fn = grad(self._lagrangian_full)
-        self._hess_fn = hessian(self._lagrangian_full)
+        # TODO add H approx
+        self._grad_loss_x_fn = grad(self._loss_fn)  # N-by-1
+        self._hess_lagr_xx_fn = hessian(self._lagrangian)  # N-by-N
+        self._grad_constr_x_fns = [grad(f) for f in self._constr_fns]
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
+        curr_x = self._initial_x
+        curr_m = self._initial_multipliers
+
+        kkt_n = self._x_dims + self._multiplier_dims
+        kkt_state = jnp.zeros(shape=(kkt_n,), dtype=jnp.float32)
+        kkt_matrix = jnp.zeros(shape=(kkt_n, kkt_n), dtype=jnp.float32)
+
         converged = False
         n_iter = 0
-
-        curr_state = jnp.concatenate([self._x0, self._lambda0])
-
-        while not converged and n_iter < self._max_iter:
+        while (not converged) and (n_iter < self._max_iter):
             # calculate direction
-            grad_at_point = self._grad_fn(curr_state)
-            # TODO check H for PD
-            hess_at_point = self._hess_fn(curr_state)
-            direction = jnp.linalg.solve(hess_at_point, grad_at_point)
+            # KKT vector - r(x, lambda)
+            grad_loss_x = self._grad_loss_x_fn(curr_x)
+            kkt_state[:self._x_dims] = grad_loss_x
+            kkt_state[self._x_dims:] = self._eval_constraints(curr_x)
+
+            # KKT matrix - r'(x, lambda)
+            # TODO check H for PD + regularization
+            hess_lagrange_xx = self._hess_lagr_xx_fn(curr_x, curr_m)
+            kkt_matrix[:self._x_dims, :self._x_dims] = hess_lagrange_xx
+
+            constr_grad_x = self._eval_constraint_gradients(curr_x)
+            kkt_matrix[:self._x_dims, self._x_dims:] = constr_grad_x
+            kkt_matrix[self._x_dims:, :self._x_dims] = jnp.transpose(constr_grad_x)
+
+            # Note: state is multiplied by (-1)
+            direction = jnp.linalg.solve(kkt_matrix, -kkt_state)
 
             # calculate step size (line search)
-            step_size = self._step_size_fn(curr_state, direction)
+            step_size = self._step_size_fn(curr_x, grad_loss_x, direction)
 
             # update state
-            curr_state -= step_size * direction
+            curr_x += step_size * direction[:self._x_dims]
+            curr_m = (1 - step_size) * curr_m + step_size * direction[self._x_dims:]
 
             # check convergence
-            converged = self._convergence_fn(grad_at_point=grad_at_point)
+            converged, conv_penalty = self._convergence_fn(curr_x, curr_m)
+
+
+            # TODO update sigma
+
+
+            # save cache + logs
+            # TODO logs
+            loss = 1
+            self._cache[n_iter] = (curr_x, curr_m, loss, step_size, conv_penalty)
 
             # increment params
             n_iter += 1
@@ -109,4 +136,8 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         # fill additional info
         info = (converged, n_iter)
 
-        return curr_state, info
+        return curr_x, info
+
+    def visualize(self):
+        # TODO
+        assert self._cache

@@ -28,4 +28,5 @@ class LearningRateStrategy:
     CONST = 'Constant'
     BT = 'Backtracking'
     BT_ARMIJO = 'Backtracking + Armijo'
-    BT_WOLFE = 'Backtracking + Wolfe'
+    BT_MERIT = 'Backtracking + Merit Fn'
+    BT_MERIT_ARMIJO = 'Backtracking + Merit Fn + Armijo'
