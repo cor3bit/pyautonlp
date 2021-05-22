@@ -22,7 +22,7 @@ class ConstrainedSolver(Solver):
         raise NotImplementedError
 
     def _lagrangian(self, x, multipliers):
-        return self._loss_fn(x) + jnp.sum(multipliers * c_fn(x) for c_fn in self._constr_fns)
+        return self._loss_fn(x) + jnp.sum(jnp.array([c_fn(x) for c_fn in self._constr_fns]) * multipliers)
 
     def _eval_constraints(self, x):
         return jnp.array([c_fn(x) for c_fn in self._constr_fns], dtype=jnp.float32)
@@ -32,7 +32,7 @@ class ConstrainedSolver(Solver):
         constraint_grads = jnp.empty((self._x_dims, self._multiplier_dims), dtype=jnp.float32)
 
         for j, c_grad_fn in enumerate(self._grad_constr_x_fns):
-            constraint_grads[:, j] = c_grad_fn(x)
+            constraint_grads = constraint_grads.at[:, j].set(c_grad_fn(x))
 
         return constraint_grads
 
@@ -77,7 +77,7 @@ class ConstrainedSolver(Solver):
     def _constant_alpha(self, **kwargs):
         return self._alpha
 
-    def _backtrack(self, curr_x, grad_loss_x, direction, armijo=False, merit=False, max_iter=10):
+    def _backtrack(self, curr_x, grad_loss_x, direction, armijo=False, merit=False, max_iter=7):
         # TODO check that starts at 1 (or more?) and not uses prev value
         alpha = 1.
 
@@ -87,7 +87,7 @@ class ConstrainedSolver(Solver):
 
         curr_loss = loss_eval_fn(curr_x)
         next_loss = loss_eval_fn(curr_x + alpha * direction_x)
-        armijo_adj = self._gamma * alpha * jnp.dot(grad_loss_x, direction_x) if armijo else 0.
+        armijo_adj = self._calc_armijo_adj(curr_x, alpha, grad_loss_x, direction_x, armijo, merit)
 
         n_iter = 0
         while (next_loss >= curr_loss + armijo_adj) and (n_iter < max_iter):
@@ -95,7 +95,7 @@ class ConstrainedSolver(Solver):
 
             # update all alpha dependent
             next_loss = loss_eval_fn(curr_x + alpha * direction_x)
-            armijo_adj = self._gamma * alpha * jnp.dot(grad_loss_x, direction_x) if armijo else 0.
+            armijo_adj = self._calc_armijo_adj(curr_x, alpha, grad_loss_x, direction_x, armijo, merit)
 
             n_iter += 1
 
@@ -103,3 +103,14 @@ class ConstrainedSolver(Solver):
 
     def _merit_fn(self, x):
         return self._loss_fn(x) + self._sigma * jnp.linalg.norm(self._eval_constraints(x), ord=1)
+
+    def _calc_armijo_adj(self, curr_x, alpha, grad_loss_x, direction_x, armijo, merit):
+        if not armijo:
+            return 0.
+
+        direct_deriv = jnp.dot(grad_loss_x, direction_x)
+        if not merit:
+            return self._gamma * alpha * direct_deriv
+
+        return self._gamma * alpha * (
+                    direct_deriv - self._sigma * jnp.linalg.norm(self._eval_constraints(curr_x), ord=1))

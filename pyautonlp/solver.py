@@ -15,3 +15,7 @@ class Solver(ABC):
             self,
     ) -> Tuple[jnp.ndarray, Tuple]:
         raise NotImplementedError
+
+    @staticmethod
+    def _get_log_str(n_iter, loss, step_size, conv_penalty):
+        return f'Iteration {n_iter}: Loss {loss:.3f}, Alpha {step_size:.5f}, KKT violation {conv_penalty:.5f}.'

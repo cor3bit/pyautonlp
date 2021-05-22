@@ -2,10 +2,13 @@ import logging
 from typing import List, Tuple, Callable
 
 import jax.numpy as jnp
-from jax import grad, jit, vmap
+from jax import grad
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from pyautonlp.constants import HessianApprox, ConvergenceCriteria, LearningRateStrategy
 from pyautonlp.utils import hessian
+from pyautonlp.charting import plot_alpha, plot_training_loss
 from pyautonlp.constr.constr_solver import ConstrainedSolver
 
 
@@ -22,7 +25,7 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             beta: float = 0.5,  # relevant if lr strategy is Backtracking
             gamma: float = 0.1,  # relevant if lr strategy is Backtracking + Armijo
             sigma: float = 1.0,  # relevant if lr strategy is Backtracking + Merit Function
-            max_iter: int = 200,
+            max_iter: int = 100,
             conv_criteria: str = ConvergenceCriteria.KKT_VIOLATION,
             conv_params: Tuple = (10, 1e-4),
             verbose: bool = False,
@@ -75,6 +78,9 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         # save intermediate step info
         self._cache = {}
 
+        # plotting params
+        self._visualize = visualize
+
         # grad & hessian functions
         # compile with JAX in advance
         # TODO add H approx
@@ -87,57 +93,76 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         curr_m = self._initial_multipliers
 
         kkt_n = self._x_dims + self._multiplier_dims
-        kkt_state = jnp.zeros(shape=(kkt_n,), dtype=jnp.float32)
         kkt_matrix = jnp.zeros(shape=(kkt_n, kkt_n), dtype=jnp.float32)
 
-        converged = False
+        converged, conv_penalty = self._convergence_fn(curr_x, curr_m)
         n_iter = 0
         while (not converged) and (n_iter < self._max_iter):
             # calculate direction
             # KKT vector - r(x, lambda)
             grad_loss_x = self._grad_loss_x_fn(curr_x)
-            kkt_state[:self._x_dims] = grad_loss_x
-            kkt_state[self._x_dims:] = self._eval_constraints(curr_x)
+            c_vals = self._eval_constraints(curr_x)
+            kkt_state = jnp.concatenate((grad_loss_x, c_vals))
 
             # KKT matrix - r'(x, lambda)
             # TODO check H for PD + regularization
             hess_lagrange_xx = self._hess_lagr_xx_fn(curr_x, curr_m)
-            kkt_matrix[:self._x_dims, :self._x_dims] = hess_lagrange_xx
+            kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(hess_lagrange_xx)
 
             constr_grad_x = self._eval_constraint_gradients(curr_x)
-            kkt_matrix[:self._x_dims, self._x_dims:] = constr_grad_x
-            kkt_matrix[self._x_dims:, :self._x_dims] = jnp.transpose(constr_grad_x)
+            kkt_matrix = kkt_matrix.at[:self._x_dims, self._x_dims:].set(constr_grad_x)
+            kkt_matrix = kkt_matrix.at[self._x_dims:, :self._x_dims].set(jnp.transpose(constr_grad_x))
 
             # Note: state is multiplied by (-1)
             direction = jnp.linalg.solve(kkt_matrix, -kkt_state)
 
             # calculate step size (line search)
-            step_size = self._step_size_fn(curr_x, grad_loss_x, direction)
+            # curr_x, grad_loss_x, direction
+            step_size = self._step_size_fn(curr_x=curr_x, grad_loss_x=grad_loss_x, direction=direction)
+
+            # save cache + logs
+            loss = self._loss_fn(curr_x)
+            self._cache[n_iter] = (curr_x, curr_m, loss, step_size, conv_penalty)
+            self._logger.info(self._get_log_str(n_iter, loss, step_size, conv_penalty))
 
             # update state
             curr_x += step_size * direction[:self._x_dims]
             curr_m = (1 - step_size) * curr_m + step_size * direction[self._x_dims:]
 
+            # TODO update sigma
+
             # check convergence
             converged, conv_penalty = self._convergence_fn(curr_x, curr_m)
 
-
-            # TODO update sigma
-
-
-            # save cache + logs
-            # TODO logs
-            loss = 1
-            self._cache[n_iter] = (curr_x, curr_m, loss, step_size, conv_penalty)
-
-            # increment params
+            # increment counter
             n_iter += 1
 
+        # log and print last results
+        loss = self._loss_fn(curr_x)
+        self._cache[n_iter] = (curr_x, curr_m, loss, .0, conv_penalty)
+        self._logger.info(self._get_log_str(n_iter, loss, .0, conv_penalty))
+
         # fill additional info
-        info = (converged, n_iter)
+        info = (converged, loss, n_iter)
+
+        # visualization
+        if self._visualize:
+            self.visualize()
 
         return curr_x, info
 
     def visualize(self):
-        # TODO
+        sns.set()
+
         assert self._cache
+        assert len(self._cache) > 1
+
+        # plot_convergence(self._cache)
+
+        ax = plot_training_loss(self._cache)
+        ax.set_title('Loss(t)')
+        plt.show()
+
+        ax = plot_alpha(self._cache)
+        ax.set_title('Alpha(t)')
+        plt.show()
