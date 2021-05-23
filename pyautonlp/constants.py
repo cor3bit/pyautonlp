@@ -14,9 +14,9 @@ class SolverType:
 
 class HessianApprox:
     EXACT = 'Exact'
-    QN = 'Quasi-Newton'
-    GN = 'Gauss-Newton'
+    GAUSS_NEWTON = 'Gauss-Newton'
     BFGS = 'BFGS'
+    STEEPEST_DESCENT = 'Steepest Descent'
 
 
 class ConvergenceCriteria:

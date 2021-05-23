@@ -1,5 +1,6 @@
 import logging
 from typing import List, Tuple, Callable
+from collections import namedtuple
 
 import jax.numpy as jnp
 from jax import grad
@@ -8,8 +9,10 @@ import seaborn as sns
 
 from pyautonlp.constants import HessianApprox, ConvergenceCriteria, LearningRateStrategy
 from pyautonlp.utils import hessian
-from pyautonlp.charting import plot_alpha, plot_training_loss
+from pyautonlp.charting import plot_alpha, plot_training_loss, plot_convergence
 from pyautonlp.constr.constr_solver import ConstrainedSolver
+
+CacheItem = namedtuple('CacheItem', 'x m loss alpha penalty')
 
 
 class ConstrainedNewtonSolver(ConstrainedSolver):
@@ -83,10 +86,12 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
         # grad & hessian functions
         # compile with JAX in advance
-        # TODO add H approx
         self._grad_loss_x_fn = grad(self._loss_fn)  # N-by-1
-        self._hess_lagr_xx_fn = hessian(self._lagrangian)  # N-by-N
         self._grad_constr_x_fns = [grad(f) for f in self._constr_fns]
+
+        self._hessian_approx = hessian_approx
+        if hessian_approx == HessianApprox.EXACT:
+            self._hess_lagr_xx_fn = hessian(self._lagrangian)  # N-by-N
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
         curr_x = self._initial_x
@@ -105,9 +110,33 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             kkt_state = jnp.concatenate((grad_loss_x, c_vals))
 
             # KKT matrix - r'(x, lambda)
-            # TODO check H for PD + regularization
-            hess_lagrange_xx = self._hess_lagr_xx_fn(curr_x, curr_m)
-            kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(hess_lagrange_xx)
+            if self._hessian_approx == HessianApprox.EXACT:
+                B = self._hess_lagr_xx_fn(curr_x, curr_m)
+            elif self._hessian_approx == HessianApprox.GAUSS_NEWTON:
+                B = grad_loss_x @ jnp.transpose(grad_loss_x)
+            elif self._hessian_approx == HessianApprox.STEEPEST_DESCENT:
+                B = jnp.eye(N=self._x_dims)
+            elif self._hessian_approx == HessianApprox.BFGS:
+                raise NotImplementedError
+            else:
+                raise NotImplementedError
+
+            # TODO check H for PD + regularization (Powell's trick)
+            if (self._hessian_approx == HessianApprox.EXACT or
+                    self._hessian_approx == HessianApprox.GAUSS_NEWTON):
+                eig_vals, eig_vecs = jnp.linalg.eigh(B)
+
+                B = self._hess_lagr_xx_fn(curr_x, curr_m)
+            elif self._hessian_approx == HessianApprox.STEEPEST_DESCENT:
+                continue
+            else:
+                raise NotImplementedError
+
+
+
+
+
+            kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(B)
 
             constr_grad_x = self._eval_constraint_gradients(curr_x)
             kkt_matrix = kkt_matrix.at[:self._x_dims, self._x_dims:].set(constr_grad_x)
@@ -122,14 +151,15 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
             # save cache + logs
             loss = self._loss_fn(curr_x)
-            self._cache[n_iter] = (curr_x, curr_m, loss, step_size, conv_penalty)
+            self._cache[n_iter] = CacheItem(curr_x, curr_m, loss, step_size, conv_penalty)
             self._logger.info(self._get_log_str(n_iter, loss, step_size, conv_penalty))
 
             # update state
             curr_x += step_size * direction[:self._x_dims]
             curr_m = (1 - step_size) * curr_m + step_size * direction[self._x_dims:]
 
-            # TODO update sigma
+            # TODO check update sigma
+            # self._sigma = jnp.max(curr_m) + .01
 
             # check convergence
             converged, conv_penalty = self._convergence_fn(curr_x, curr_m)
@@ -139,7 +169,7 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
         # log and print last results
         loss = self._loss_fn(curr_x)
-        self._cache[n_iter] = (curr_x, curr_m, loss, .0, conv_penalty)
+        self._cache[n_iter] = CacheItem(curr_x, curr_m, loss, .0, conv_penalty)
         self._logger.info(self._get_log_str(n_iter, loss, .0, conv_penalty))
 
         # fill additional info
@@ -157,10 +187,12 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         assert self._cache
         assert len(self._cache) > 1
 
-        # plot_convergence(self._cache)
+        # ax = plot_convergence(self._cache, self._loss_fn)
+        # ax.set_title('Loss(t) (log scale)')
+        # plt.show()
 
         ax = plot_training_loss(self._cache)
-        ax.set_title('Loss(t)')
+        ax.set_title('Loss(t) (log scale)')
         plt.show()
 
         ax = plot_alpha(self._cache)

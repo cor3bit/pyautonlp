@@ -25,9 +25,9 @@ if __name__ == '__main__':
         # solver params
         solver_type='newton',
         guess=(0, 1),
-        hessian_approx=HessianApprox.EXACT,
+        hessian_approx=HessianApprox.STEEPEST_DESCENT,
         conv_criteria=ConvergenceCriteria.KKT_VIOLATION,
-        lr_strategy=LearningRateStrategy.BT_ARMIJO,
+        lr_strategy=LearningRateStrategy.BT_MERIT_ARMIJO,
         lr=0.1,
 
         # level of details
