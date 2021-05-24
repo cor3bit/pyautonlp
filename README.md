@@ -61,8 +61,10 @@ Web: https://mariozanon.wordpress.com/numerical-methods-for-optimal-control/
 Web: https://github.com/google/jax
 
 - The visualization of the algorithm performance is 
-inspired by Jaewan Yun's library. 
-Web: https://github.com/Jaewan-Yun/optimizer-visualization
+inspired by Jaewan Yun's library 
+  (https://github.com/Jaewan-Yun/optimizer-visualization) 
+  and Louis Tiao's post 
+  (http://louistiao.me/notes/visualizing-and-animating-optimization-algorithms-with-matplotlib/)
 
 
 ### References

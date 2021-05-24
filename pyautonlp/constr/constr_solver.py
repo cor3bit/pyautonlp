@@ -3,7 +3,7 @@ from typing import Tuple, Callable
 
 import jax.numpy as jnp
 
-from pyautonlp.constants import ConvergenceCriteria, LearningRateStrategy
+from pyautonlp.constants import ConvergenceCriteria, LineSearch
 from pyautonlp.solver import Solver
 
 
@@ -61,15 +61,15 @@ class ConstrainedSolver(Solver):
             self,
             strategy: str,
     ) -> Callable:
-        if strategy == LearningRateStrategy.CONST:
+        if strategy == LineSearch.CONST:
             return self._constant_alpha
-        elif strategy == LearningRateStrategy.BT:
+        elif strategy == LineSearch.BT:
             return partial(self._backtrack)
-        elif strategy == LearningRateStrategy.BT_ARMIJO:
+        elif strategy == LineSearch.BT_ARMIJO:
             return partial(self._backtrack, armijo=True)
-        elif strategy == LearningRateStrategy.BT_MERIT:
+        elif strategy == LineSearch.BT_MERIT:
             return partial(self._backtrack, merit=True)
-        elif strategy == LearningRateStrategy.BT_MERIT_ARMIJO:
+        elif strategy == LineSearch.BT_MERIT_ARMIJO:
             return partial(self._backtrack, armijo=True, merit=True)
         else:
             raise ValueError(f'Unrecognized learning rate strategy: {strategy}.')
@@ -77,7 +77,7 @@ class ConstrainedSolver(Solver):
     def _constant_alpha(self, **kwargs):
         return self._alpha
 
-    def _backtrack(self, curr_x, grad_loss_x, direction, armijo=False, merit=False, max_iter=7):
+    def _backtrack(self, curr_x, grad_loss_x, direction, armijo=False, merit=False, max_iter=20):
         # TODO check that starts at 1 (or more?) and not uses prev value
         alpha = 1.
 
@@ -113,4 +113,4 @@ class ConstrainedSolver(Solver):
             return self._gamma * alpha * direct_deriv
 
         return self._gamma * alpha * (
-                    direct_deriv - self._sigma * jnp.linalg.norm(self._eval_constraints(curr_x), ord=1))
+                direct_deriv - self._sigma * jnp.linalg.norm(self._eval_constraints(curr_x), ord=1))

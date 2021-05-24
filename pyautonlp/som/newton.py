@@ -4,15 +4,15 @@ from typing import List, Tuple, Callable
 import jax.numpy as jnp
 from jax import grad, jit, vmap
 
-from pyautonlp.constants import HessianApprox, ConvergenceCriteria, LearningRateStrategy
+from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch
 from pyautonlp.utils import hessian
 
 
 def newton(
         loss_fn: Callable,
         guess: jnp.ndarray = None,
-        hessian_approx: str = HessianApprox.EXACT,
-        lr_strategy: str = LearningRateStrategy.CONST,
+        hessian_approx: str = Direction.EXACT_NEWTON,
+        lr_strategy: str = LineSearch.CONST,
         lr: float = 0.01,
         alpha: float = None,  # relevant if lr strategy is Backtracking
         beta: float = None,  # relevant if lr strategy is Backtracking

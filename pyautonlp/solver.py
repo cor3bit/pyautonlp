@@ -19,3 +19,13 @@ class Solver(ABC):
     @staticmethod
     def _get_log_str(n_iter, loss, step_size, conv_penalty):
         return f'Iteration {n_iter}: Loss {loss:.3f}, Alpha {step_size:.5f}, KKT violation {conv_penalty:.5f}.'
+
+    @staticmethod
+    def _is_pd_matrix(a: jnp.ndarray) -> bool:
+        try:
+            L = jnp.linalg.cholesky(a)
+            if jnp.isnan(L).any():
+                return False
+            return True
+        except Exception as e:
+            return False

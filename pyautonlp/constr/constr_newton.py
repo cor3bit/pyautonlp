@@ -3,13 +3,14 @@ from typing import List, Tuple, Callable
 from collections import namedtuple
 
 import jax.numpy as jnp
+import numpy as np
 from jax import grad
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from pyautonlp.constants import HessianApprox, ConvergenceCriteria, LearningRateStrategy
+from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, HessianRegularization
 from pyautonlp.utils import hessian
-from pyautonlp.charting import plot_alpha, plot_training_loss, plot_convergence
+from pyautonlp.charting import plot_alpha, plot_training_loss, plot_convergence, plot_penalty
 from pyautonlp.constr.constr_solver import ConstrainedSolver
 
 CacheItem = namedtuple('CacheItem', 'x m loss alpha penalty')
@@ -22,15 +23,16 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             eq_constr: List[Callable] = None,
             ineq_constr: List[Callable] = None,
             guess: jnp.ndarray = None,
-            hessian_approx: str = HessianApprox.EXACT,
-            lr_strategy: str = LearningRateStrategy.CONST,
-            lr: float = 0.01,  # relevant if lr strategy is Constant
-            beta: float = 0.5,  # relevant if lr strategy is Backtracking
-            gamma: float = 0.1,  # relevant if lr strategy is Backtracking + Armijo
-            sigma: float = 1.0,  # relevant if lr strategy is Backtracking + Merit Function
-            max_iter: int = 100,
+            direction: str = Direction.STEEPEST_DESCENT,
+            reg: str = HessianRegularization.NONE,
+            line_search: str = LineSearch.CONST,
+            alpha: float = 0.01,  # relevant for Constant step line search
+            beta: float = 0.5,  # relevant for Backtracking line search
+            gamma: float = 0.1,  # relevant for Backtracking + Armijo line search
+            sigma: float = 1.0,  # relevant for Backtracking + Merit Function line search
             conv_criteria: str = ConvergenceCriteria.KKT_VIOLATION,
-            conv_params: Tuple = (10, 1e-4),
+            conv_tol: float = 1e-8,
+            max_iter: int = 500,
             verbose: bool = False,
             visualize: bool = False,
     ):
@@ -66,17 +68,16 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         self._initial_multipliers = jnp.zeros(shape=(self._multiplier_dims,), dtype=jnp.float32)
 
         # convergence
-        conv_n, conv_tol = conv_params
         self._convergence_fn = self._get_convergence_fn(conv_criteria)
         self._max_iter = max_iter
         self._tol = conv_tol
 
         # learning rate
-        self._alpha = lr
+        self._step_size_fn = self._get_step_size_fn(line_search)
+        self._alpha = alpha
         self._beta = beta
         self._gamma = gamma
         self._sigma = sigma
-        self._step_size_fn = self._get_step_size_fn(lr_strategy)
 
         # save intermediate step info
         self._cache = {}
@@ -89,97 +90,100 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         self._grad_loss_x_fn = grad(self._loss_fn)  # N-by-1
         self._grad_constr_x_fns = [grad(f) for f in self._constr_fns]
 
-        self._hessian_approx = hessian_approx
-        if hessian_approx == HessianApprox.EXACT:
+        self._direction = direction
+        if direction == Direction.EXACT_NEWTON:
             self._hess_lagr_xx_fn = hessian(self._lagrangian)  # N-by-N
 
+        self._reg = reg
+
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
-        curr_x = self._initial_x
-        curr_m = self._initial_multipliers
+        x_k = self._initial_x
+        m_k = self._initial_multipliers
 
         kkt_n = self._x_dims + self._multiplier_dims
         kkt_matrix = jnp.zeros(shape=(kkt_n, kkt_n), dtype=jnp.float32)
 
-        converged, conv_penalty = self._convergence_fn(curr_x, curr_m)
-        n_iter = 0
-        while (not converged) and (n_iter < self._max_iter):
+        converged, conv_penalty = self._convergence_fn(x_k, m_k)
+        k = 0
+        while (not converged) and (k < self._max_iter):
             # calculate direction
             # KKT vector - r(x, lambda)
-            grad_loss_x = self._grad_loss_x_fn(curr_x)
-            c_vals = self._eval_constraints(curr_x)
+            grad_loss_x = self._grad_loss_x_fn(x_k)
+            c_vals = self._eval_constraints(x_k)
             kkt_state = jnp.concatenate((grad_loss_x, c_vals))
 
-            # KKT matrix - r'(x, lambda)
-            if self._hessian_approx == HessianApprox.EXACT:
-                B = self._hess_lagr_xx_fn(curr_x, curr_m)
-            elif self._hessian_approx == HessianApprox.GAUSS_NEWTON:
-                B = grad_loss_x @ jnp.transpose(grad_loss_x)
-            elif self._hessian_approx == HessianApprox.STEEPEST_DESCENT:
-                B = jnp.eye(N=self._x_dims)
-            elif self._hessian_approx == HessianApprox.BFGS:
-                raise NotImplementedError
+            # Find a preconditioning matrix B for a gradient direction
+            if self._direction == Direction.EXACT_NEWTON:
+                B_k = self._hess_lagr_xx_fn(x_k, m_k)
+            elif self._direction == Direction.GAUSS_NEWTON:
+                B_k = grad_loss_x @ jnp.transpose(grad_loss_x)
+            elif self._direction == Direction.STEEPEST_DESCENT:
+                B_k = jnp.eye(N=self._x_dims)
             else:
                 raise NotImplementedError
 
             # TODO check H for PD + regularization (Powell's trick)
-            if (self._hessian_approx == HessianApprox.EXACT or
-                    self._hessian_approx == HessianApprox.GAUSS_NEWTON):
-                eig_vals, eig_vecs = jnp.linalg.eigh(B)
+            if (self._direction != Direction.STEEPEST_DESCENT
+                    and self._reg != HessianRegularization.NONE):
+                # TODO verify that Cholesky check is faster
+                if not self._is_pd_matrix(B_k):
+                    if self._reg == HessianRegularization.EIGEN_DELTA:
+                        delta = 1e-5
+                        eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
+                        eig_vals_modified = eig_vals.at[eig_vals < delta].set(delta)
+                        B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
+                    elif self._reg == HessianRegularization.EIGEN_FLIP:
+                        eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
+                        eig_vals_modified = jnp.array([-e if e < 0 else e for e in eig_vals])
+                        B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
+                    else:
+                        # TODO modified Cholesky
+                        raise NotImplementedError
 
-                B = self._hess_lagr_xx_fn(curr_x, curr_m)
-            elif self._hessian_approx == HessianApprox.STEEPEST_DESCENT:
-                continue
-            else:
-                raise NotImplementedError
-
-
-
-
-
-            kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(B)
-
-            constr_grad_x = self._eval_constraint_gradients(curr_x)
+            # Form KKT matrix, r'(x, lambda)
+            kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(B_k)
+            constr_grad_x = self._eval_constraint_gradients(x_k)
             kkt_matrix = kkt_matrix.at[:self._x_dims, self._x_dims:].set(constr_grad_x)
             kkt_matrix = kkt_matrix.at[self._x_dims:, :self._x_dims].set(jnp.transpose(constr_grad_x))
 
             # Note: state is multiplied by (-1)
-            direction = jnp.linalg.solve(kkt_matrix, -kkt_state)
+            d_k = jnp.linalg.solve(kkt_matrix, -kkt_state)
 
             # calculate step size (line search)
             # curr_x, grad_loss_x, direction
-            step_size = self._step_size_fn(curr_x=curr_x, grad_loss_x=grad_loss_x, direction=direction)
+            alpha_k = self._step_size_fn(curr_x=x_k, grad_loss_x=grad_loss_x, direction=d_k)
 
             # save cache + logs
-            loss = self._loss_fn(curr_x)
-            self._cache[n_iter] = CacheItem(curr_x, curr_m, loss, step_size, conv_penalty)
-            self._logger.info(self._get_log_str(n_iter, loss, step_size, conv_penalty))
+            loss = self._loss_fn(x_k)
+            self._cache[k] = CacheItem(x_k, m_k, loss, alpha_k, conv_penalty)
+            self._logger.info(self._get_log_str(k, loss, alpha_k, conv_penalty))
 
             # update state
-            curr_x += step_size * direction[:self._x_dims]
-            curr_m = (1 - step_size) * curr_m + step_size * direction[self._x_dims:]
+            x_k += alpha_k * d_k[:self._x_dims]
+            m_k = (1 - alpha_k) * m_k + alpha_k * d_k[self._x_dims:]
 
             # TODO check update sigma
             # self._sigma = jnp.max(curr_m) + .01
 
             # check convergence
-            converged, conv_penalty = self._convergence_fn(curr_x, curr_m)
+            converged, conv_penalty = self._convergence_fn(x_k, m_k)
 
             # increment counter
-            n_iter += 1
+            k += 1
 
         # log and print last results
-        loss = self._loss_fn(curr_x)
-        self._cache[n_iter] = CacheItem(curr_x, curr_m, loss, .0, conv_penalty)
-        self._logger.info(self._get_log_str(n_iter, loss, .0, conv_penalty))
+        loss = self._loss_fn(x_k)
+        self._cache[k] = CacheItem(x_k, m_k, loss, .0, conv_penalty)
+        self._logger.info(self._get_log_str(k, loss, .0, conv_penalty))
 
         # fill additional info
-        info = (converged, loss, n_iter)
+        info = (converged, loss, k)
 
         # visualization
         if self._visualize:
             self.visualize()
 
-        return curr_x, info
+        return x_k, info
 
     def visualize(self):
         sns.set()
@@ -191,8 +195,12 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         # ax.set_title('Loss(t) (log scale)')
         # plt.show()
 
+        ax = plot_penalty(self._cache)
+        ax.set_title('Penalty(t) (log scale)')
+        plt.show()
+
         ax = plot_training_loss(self._cache)
-        ax.set_title('Loss(t) (log scale)')
+        ax.set_title('Loss(t)')
         plt.show()
 
         ax = plot_alpha(self._cache)
