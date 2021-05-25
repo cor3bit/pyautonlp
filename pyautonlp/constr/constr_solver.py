@@ -51,9 +51,9 @@ class ConstrainedSolver(Solver):
         else:
             raise ValueError(f'Unrecognized convergence criteria: {criteria}.')
 
-    def _kkt_violation(self, curr_x, curr_m, **kwargs):
-        max_c_violation = jnp.max(jnp.abs(self._eval_constraints(curr_x)))
-        max_lagr_grad_violation = jnp.max(jnp.abs(self._grad_lagr_x_fn(curr_x, curr_m)))
+    def _kkt_violation(self, x_k, m_k, **kwargs):
+        max_c_violation = jnp.max(jnp.abs(self._eval_constraints(x_k)))
+        max_lagr_grad_violation = jnp.max(jnp.abs(self._grad_lagr_x_fn(x_k, m_k)))
         max_viol = jnp.maximum(max_c_violation, max_lagr_grad_violation)
         return max_viol <= self._tol, max_viol
 
@@ -72,30 +72,29 @@ class ConstrainedSolver(Solver):
         elif strategy == LineSearch.BT_MERIT_ARMIJO:
             return partial(self._backtrack, armijo=True, merit=True)
         else:
-            raise ValueError(f'Unrecognized learning rate strategy: {strategy}.')
+            raise ValueError(f'Unrecognized line search method: {strategy}.')
 
     def _constant_alpha(self, **kwargs):
         return self._alpha
 
-    def _backtrack(self, curr_x, grad_loss_x, direction, armijo=False, merit=False, max_iter=20):
-        # TODO check that starts at 1 (or more?) and not uses prev value
+    def _backtrack(self, x_k, grad_loss_x, direction, armijo=False, merit=False, max_iter=20):
         alpha = 1.
 
         direction_x = direction[:self._x_dims]
 
         loss_eval_fn = self._merit_fn if merit else self._loss_fn
 
-        curr_loss = loss_eval_fn(curr_x)
-        next_loss = loss_eval_fn(curr_x + alpha * direction_x)
-        armijo_adj = self._calc_armijo_adj(curr_x, alpha, grad_loss_x, direction_x, armijo, merit)
+        curr_loss = loss_eval_fn(x_k)
+        next_loss = loss_eval_fn(x_k + alpha * direction_x)
+        armijo_adj = self._calc_armijo_adj(x_k, alpha, grad_loss_x, direction_x, armijo, merit)
 
         n_iter = 0
         while (next_loss >= curr_loss + armijo_adj) and (n_iter < max_iter):
             alpha *= self._beta
 
             # update all alpha dependent
-            next_loss = loss_eval_fn(curr_x + alpha * direction_x)
-            armijo_adj = self._calc_armijo_adj(curr_x, alpha, grad_loss_x, direction_x, armijo, merit)
+            next_loss = loss_eval_fn(x_k + alpha * direction_x)
+            armijo_adj = self._calc_armijo_adj(x_k, alpha, grad_loss_x, direction_x, armijo, merit)
 
             n_iter += 1
 

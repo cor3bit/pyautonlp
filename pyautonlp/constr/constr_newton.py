@@ -13,7 +13,7 @@ from pyautonlp.utils import hessian
 from pyautonlp.charting import plot_alpha, plot_training_loss, plot_convergence, plot_penalty
 from pyautonlp.constr.constr_solver import ConstrainedSolver
 
-CacheItem = namedtuple('CacheItem', 'x m loss alpha penalty')
+CacheItem = namedtuple('CacheItem', 'x m loss alpha penalty sigma')
 
 
 class ConstrainedNewtonSolver(ConstrainedSolver):
@@ -35,6 +35,9 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             max_iter: int = 500,
             verbose: bool = False,
             visualize: bool = False,
+            np_loss_fn: Callable = None,  # used for visualization
+            np_eq_constr: List[Callable] = None,  # used for visualization
+            np_ineq_constr: List[Callable] = None,  # used for visualization
     ):
         # logger
         self._logger = logging.getLogger('newton_solver')
@@ -96,6 +99,10 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
         self._reg = reg
 
+        # viz
+        self._np_loss_fn = np_loss_fn
+        self._np_eq_constr = np_eq_constr
+
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
         x_k = self._initial_x
         m_k = self._initial_multipliers
@@ -116,7 +123,8 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             if self._direction == Direction.EXACT_NEWTON:
                 B_k = self._hess_lagr_xx_fn(x_k, m_k)
             elif self._direction == Direction.GAUSS_NEWTON:
-                B_k = grad_loss_x @ jnp.transpose(grad_loss_x)
+                raise NotImplementedError
+                # B_k = grad_loss_x @ jnp.transpose(grad_loss_x)
             elif self._direction == Direction.STEEPEST_DESCENT:
                 B_k = jnp.eye(N=self._x_dims)
             else:
@@ -133,8 +141,9 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
                         eig_vals_modified = eig_vals.at[eig_vals < delta].set(delta)
                         B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
                     elif self._reg == HessianRegularization.EIGEN_FLIP:
+                        delta = 1e-5
                         eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
-                        eig_vals_modified = jnp.array([-e if e < 0 else e for e in eig_vals])
+                        eig_vals_modified = jnp.array([flip_eig(e, delta) for e in eig_vals])
                         B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
                     else:
                         # TODO modified Cholesky
@@ -151,19 +160,20 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
             # calculate step size (line search)
             # curr_x, grad_loss_x, direction
-            alpha_k = self._step_size_fn(curr_x=x_k, grad_loss_x=grad_loss_x, direction=d_k)
+            alpha_k = self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k)
 
             # save cache + logs
             loss = self._loss_fn(x_k)
-            self._cache[k] = CacheItem(x_k, m_k, loss, alpha_k, conv_penalty)
-            self._logger.info(self._get_log_str(k, loss, alpha_k, conv_penalty))
+            cache_item = CacheItem(x_k, m_k, loss, alpha_k, conv_penalty, self._sigma)
+            self._cache[k] = cache_item
+            self._logger.info(self._get_log_str(k, cache_item))
 
             # update state
             x_k += alpha_k * d_k[:self._x_dims]
             m_k = (1 - alpha_k) * m_k + alpha_k * d_k[self._x_dims:]
 
             # TODO check update sigma
-            # self._sigma = jnp.max(curr_m) + .01
+            self._sigma = jnp.max(jnp.abs(m_k)) + 0.1
 
             # check convergence
             converged, conv_penalty = self._convergence_fn(x_k, m_k)
@@ -173,8 +183,9 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
         # log and print last results
         loss = self._loss_fn(x_k)
-        self._cache[k] = CacheItem(x_k, m_k, loss, .0, conv_penalty)
-        self._logger.info(self._get_log_str(k, loss, .0, conv_penalty))
+        cache_item = CacheItem(x_k, m_k, loss, .0, conv_penalty, self._sigma)
+        self._cache[k] = cache_item
+        self._logger.info(self._get_log_str(k, cache_item))
 
         # fill additional info
         info = (converged, loss, k)
@@ -191,18 +202,27 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         assert self._cache
         assert len(self._cache) > 1
 
-        # ax = plot_convergence(self._cache, self._loss_fn)
-        # ax.set_title('Loss(t) (log scale)')
+        ax = plot_convergence(self._cache, self._np_loss_fn, self._np_eq_constr)
+        ax.set_title('Convergence')
+        plt.show()
+
+        # ax = plot_penalty(self._cache)
+        # ax.set_title('Penalty(t) (log scale)')
+        # plt.show()
+        #
+        # ax = plot_training_loss(self._cache)
+        # ax.set_title('Loss(t)')
+        # plt.show()
+        #
+        # ax = plot_alpha(self._cache)
+        # ax.set_title('Alpha(t)')
         # plt.show()
 
-        ax = plot_penalty(self._cache)
-        ax.set_title('Penalty(t) (log scale)')
-        plt.show()
 
-        ax = plot_training_loss(self._cache)
-        ax.set_title('Loss(t)')
-        plt.show()
-
-        ax = plot_alpha(self._cache)
-        ax.set_title('Alpha(t)')
-        plt.show()
+def flip_eig(e, delta):
+    if jnp.isclose(e, 0.):
+        return delta
+    elif e < 0:
+        return -e
+    else:
+        return e

@@ -16,7 +16,6 @@ def equality_constr(x):
     return jnp.dot(x, x) - 1
 
 
-
 # guess (0., 1.), (-1, -1.),
 
 if __name__ == '__main__':
@@ -36,12 +35,14 @@ if __name__ == '__main__':
         gamma=0.1,
         sigma=1.0,
         conv_criteria=ConvergenceCriteria.KKT_VIOLATION,
-        conv_tol=1e-8,
+        conv_tol=1e-7,
         max_iter=200,
 
         # level of details
         verbose=True,
         visualize=True,
+        np_loss_fn=lambda x, y: 0.5 * x * x + 0.5 * y * y + x + y,  # used for visualization
+        np_eq_constr=[lambda x, y: x * x + y * y - 1],  # used for visualization
     )
 
     print(sln)

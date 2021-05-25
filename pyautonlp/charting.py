@@ -1,4 +1,4 @@
-from typing import Dict, Tuple, Callable
+from typing import Dict, Tuple, Callable, List
 from itertools import product
 
 import numpy as np
@@ -10,14 +10,13 @@ import seaborn as sns
 import jax.numpy as jnp
 
 
-def plot_convergence(data: Dict, loss_fn: Callable):
-    # xmin, xmax, xstep = -4.5, 4.5, .2
-    # ymin, ymax, ystep = -4.5, 4.5, .2
-    #
-    # x, y = np.meshgrid(np.arange(xmin, xmax + xstep, xstep), np.arange(ymin, ymax + ystep, ystep))
-
-    # x, y
-    Nx, Ny = 10, 10
+def plot_convergence(
+        data: Dict,
+        loss_fn: Callable,
+        eq_constr: List[Callable],
+):
+    # plot contours
+    Nx, Ny = 40, 40
     x = np.linspace(-2, 2, Nx)
     y = np.linspace(-2, 2, Ny)
     xx, yy = np.meshgrid(x, y)
@@ -29,12 +28,18 @@ def plot_convergence(data: Dict, loss_fn: Callable):
     plt.xlabel(r'x')
     plt.ylabel(r'y')
 
-    a = 1
-    # z = loss_fn(ndata)
+    plt.contour(xx, yy, zz, 30, cmap='jet')
 
-    plt.contour(xx, yy, zz, 25, cmap='jet')
+    # plot constraints
+    for c_fn in eq_constr:
+        c_vals_x = c_fn(xx, yy)
+        plt.contour(xx, yy, c_vals_x, [0], colors='k')
 
-    plt.show()
+    # path
+    path = np.array([np.array(item.x) for item in data.values()])
+    plt.plot(path[:, 0], path[:, 1], marker='o', color='red')
+
+    return ax
 
 
 def plot_training_loss(data: Dict):
