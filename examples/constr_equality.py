@@ -40,10 +40,7 @@ if __name__ == '__main__':
 
         # level of details
         verbose=True,
-        visualize=True,
-        np_loss_fn=lambda x, y: 0.5 * x * x + 0.5 * y * y + x + y,  # used for visualization
-        np_eq_constr=[lambda x, y: x * x + y * y - 1],  # used for visualization
     )
 
     print(sln)
-    print(info)
+    # print(info)

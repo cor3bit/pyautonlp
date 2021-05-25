@@ -10,7 +10,6 @@ import seaborn as sns
 
 from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, HessianRegularization
 from pyautonlp.utils import hessian
-from pyautonlp.charting import plot_alpha, plot_training_loss, plot_convergence, plot_penalty
 from pyautonlp.constr.constr_solver import ConstrainedSolver
 
 CacheItem = namedtuple('CacheItem', 'x m loss alpha penalty sigma')
@@ -34,10 +33,7 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             conv_tol: float = 1e-8,
             max_iter: int = 500,
             verbose: bool = False,
-            visualize: bool = False,
-            np_loss_fn: Callable = None,  # used for visualization
-            np_eq_constr: List[Callable] = None,  # used for visualization
-            np_ineq_constr: List[Callable] = None,  # used for visualization
+            **kwargs
     ):
         # logger
         self._logger = logging.getLogger('newton_solver')
@@ -85,9 +81,6 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         # save intermediate step info
         self._cache = {}
 
-        # plotting params
-        self._visualize = visualize
-
         # grad & hessian functions
         # compile with JAX in advance
         self._grad_loss_x_fn = grad(self._loss_fn)  # N-by-1
@@ -98,10 +91,6 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             self._hess_lagr_xx_fn = hessian(self._lagrangian)  # N-by-N
 
         self._reg = reg
-
-        # viz
-        self._np_loss_fn = np_loss_fn
-        self._np_eq_constr = np_eq_constr
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
         x_k = self._initial_x
@@ -188,35 +177,9 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         self._logger.info(self._get_log_str(k, cache_item))
 
         # fill additional info
-        info = (converged, loss, k)
-
-        # visualization
-        if self._visualize:
-            self.visualize()
+        info = (converged, loss, k, self._cache)
 
         return x_k, info
-
-    def visualize(self):
-        sns.set()
-
-        assert self._cache
-        assert len(self._cache) > 1
-
-        ax = plot_convergence(self._cache, self._np_loss_fn, self._np_eq_constr)
-        ax.set_title('Convergence')
-        plt.show()
-
-        # ax = plot_penalty(self._cache)
-        # ax.set_title('Penalty(t) (log scale)')
-        # plt.show()
-        #
-        # ax = plot_training_loss(self._cache)
-        # ax.set_title('Loss(t)')
-        # plt.show()
-        #
-        # ax = plot_alpha(self._cache)
-        # ax.set_title('Alpha(t)')
-        # plt.show()
 
 
 def flip_eig(e, delta):

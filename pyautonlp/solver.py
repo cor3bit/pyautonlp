@@ -8,7 +8,7 @@ import jax.numpy as jnp
 class Solver(ABC):
     _loss_fn = None
     _x_dims = None
-    _cache = None  # save solver info for charting
+    _cache = None  # info collected during the run
 
     @abstractmethod
     def solve(
