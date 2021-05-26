@@ -20,6 +20,9 @@ class Visualizer:
             cache_names: List[str] = None,
             x1_bounds: Tuple[float, float] = (-1, 1),
             x2_bounds: Tuple[float, float] = (-1, 1),
+            with_alpha_plot: bool = False,
+            with_loss_plot: bool = False,
+            with_penalty_plot: bool = False,
             separate: bool = False,
     ):
         self._loss_fn = loss_fn
@@ -29,7 +32,22 @@ class Visualizer:
         self._cache_names = cache_names
         self._x1_bounds = x1_bounds
         self._x2_bounds = x2_bounds
+        self._with_alpha_plot = with_alpha_plot
+        self._with_loss_plot = with_loss_plot
+        self._with_penalty_plot = with_penalty_plot
         self._separate = separate
+
+    def visualize(self):
+        self.plot_convergence()
+
+        if self._with_alpha_plot:
+            self.plot_alpha()
+
+        if self._with_loss_plot:
+            self.plot_training_loss()
+
+        if self._with_penalty_plot:
+            self.plot_penalty()
 
     def plot_convergence(self):
         # create numpy meshgrid
@@ -68,23 +86,38 @@ class Visualizer:
         plt.legend()
         plt.show()
 
-    # def plot_training_loss(self):
-    #     # (curr_x, curr_m, loss, step_size, conv_penalty)
-    #     times = np.fromiter(data.keys(), dtype=float)
-    #     losses = np.array([item.loss for item in data.values()])
-    #     return sns.lineplot(x=times, y=losses)
-    #
-    # def plot_penalty(self):
-    #     # (curr_x, curr_m, loss, step_size, conv_penalty)
-    #     times = np.fromiter(data.keys(), dtype=float)
-    #     penalties = np.array([item.penalty for item in data.values()])
-    #     return sns.lineplot(x=times, y=np.log(penalties))
-    #
-    # def plot_alpha(self):
-    #     # (curr_x, curr_m, loss, step_size, conv_penalty)
-    #     times = np.fromiter(data.keys(), dtype=float)
-    #     alphas = np.array([item.alpha for item in data.values()])
-    #     return sns.lineplot(x=times[:-1], y=alphas[:-1])
+    def plot_training_loss(self):
+        if self._solver_caches:
+            for cache, name in zip(self._solver_caches, self._cache_names):
+                times = np.fromiter(cache.keys(), dtype=float)
+                losses = np.array([item.loss for item in cache.values()])
+                sns.lineplot(x=times, y=losses, label=name)
+
+        # ax.set_title('Convergence')
+        plt.legend()
+        plt.show()
+
+    def plot_penalty(self):
+        if self._solver_caches:
+            for cache, name in zip(self._solver_caches, self._cache_names):
+                times = np.fromiter(cache.keys(), dtype=float)
+                penalties = np.array([item.penalty for item in cache.values()])
+                sns.lineplot(x=times, y=penalties, label=name)
+
+        # ax.set_title('Convergence')
+        plt.legend()
+        plt.show()
+
+    def plot_alpha(self):
+        if self._solver_caches:
+            for cache, name in zip(self._solver_caches, self._cache_names):
+                times = np.fromiter(cache.keys(), dtype=float)
+                alphas = np.array([item.alpha for item in cache.values()])
+                sns.lineplot(x=times[:-1], y=alphas[:-1], label=name)
+
+        # ax.set_title('Convergence')
+        plt.legend()
+        plt.show()
 
 
 # --------------- runner ---------------
@@ -126,6 +159,9 @@ if __name__ == '__main__':
         cache_names=['temp1', 'temp2'],
         x1_bounds=(-2, 2),
         x2_bounds=(-2, 2),
+        with_loss_plot=True,
+        with_alpha_plot=True,
+        with_penalty_plot=True,
     )
 
-    visualizer.plot_convergence()
+    visualizer.visualize()
