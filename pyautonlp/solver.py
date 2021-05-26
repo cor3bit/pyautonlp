@@ -18,9 +18,13 @@ class Solver(ABC):
 
     @staticmethod
     def _get_log_str(k, cache_item):
-        return f'Iteration {k}: Loss {cache_item.loss:.3f}, ' \
-               f'Alpha {cache_item.alpha:.5f}, Sigma {cache_item.sigma:.4f}, ' \
-               f'KKT violation {cache_item.penalty:.5f}.'
+        is_pd = '-' if cache_item.H_pd is None else str(cache_item.H_pd)
+
+        return f'Iteration {k}: Loss: {cache_item.loss:.3f}; ' \
+               f'Alpha: {cache_item.alpha:.6f}; ' \
+               f'H is pd: {is_pd}; ' \
+               f'Sigma: {cache_item.sigma:.2f}; ' \
+               f'KKT Penalty: {cache_item.penalty:.5f}.'
 
     @staticmethod
     def _is_pd_matrix(a: jnp.ndarray) -> bool:

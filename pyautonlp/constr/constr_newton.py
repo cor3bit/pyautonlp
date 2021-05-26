@@ -12,7 +12,7 @@ from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, Hess
 from pyautonlp.utils import hessian
 from pyautonlp.constr.constr_solver import ConstrainedSolver
 
-CacheItem = namedtuple('CacheItem', 'x m loss alpha penalty sigma')
+CacheItem = namedtuple('CacheItem', 'x m loss alpha x_dir H_pd penalty sigma')
 
 
 class ConstrainedNewtonSolver(ConstrainedSolver):
@@ -94,7 +94,10 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
         x_k = self._initial_x
+        self._logger.info(f'Initial guess is: {x_k}.')
+
         m_k = self._initial_multipliers
+        self._logger.info(f'Initial multipliers are: {m_k}.')
 
         kkt_n = self._x_dims + self._multiplier_dims
         kkt_matrix = jnp.zeros(shape=(kkt_n, kkt_n), dtype=jnp.float32)
@@ -120,10 +123,12 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
                 raise NotImplementedError
 
             # TODO check H for PD + regularization (Powell's trick)
+            B_k_is_pd = None
             if (self._direction != Direction.STEEPEST_DESCENT
                     and self._reg != HessianRegularization.NONE):
                 # TODO verify that Cholesky check is faster
-                if not self._is_pd_matrix(B_k):
+                B_k_is_pd = self._is_pd_matrix(B_k)
+                if not B_k_is_pd:
                     if self._reg == HessianRegularization.EIGEN_DELTA:
                         delta = 1e-5
                         eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
@@ -153,7 +158,8 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
             # save cache + logs
             loss = self._loss_fn(x_k)
-            cache_item = CacheItem(x_k, m_k, loss, alpha_k, conv_penalty, self._sigma)
+            x_dir_norm = jnp.max(jnp.abs(d_k[:self._x_dims]))
+            cache_item = CacheItem(x_k, m_k, loss, alpha_k, x_dir_norm, B_k_is_pd, conv_penalty, self._sigma)
             self._cache[k] = cache_item
             self._logger.info(self._get_log_str(k, cache_item))
 
@@ -172,7 +178,7 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
         # log and print last results
         loss = self._loss_fn(x_k)
-        cache_item = CacheItem(x_k, m_k, loss, .0, conv_penalty, self._sigma)
+        cache_item = CacheItem(x_k, m_k, loss, .0, .0, None, conv_penalty, self._sigma)
         self._cache[k] = cache_item
         self._logger.info(self._get_log_str(k, cache_item))
 
