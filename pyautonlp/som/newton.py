@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from jax import grad, jit, vmap
 
 from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch
-from pyautonlp.utils import hessian
+# from pyautonlp.utils import hessian
 
 
 def newton(

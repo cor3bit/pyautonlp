@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, HessianRegularization
-from pyautonlp.utils import hessian
 from pyautonlp.constr.constr_solver import ConstrainedSolver
 
 CacheItem = namedtuple('CacheItem', 'x m loss alpha x_dir H_pd penalty sigma')
@@ -88,7 +87,14 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
         self._direction = direction
         if direction == Direction.EXACT_NEWTON:
-            self._hess_lagr_xx_fn = hessian(self._lagrangian)  # N-by-N
+            self._hess_lagr_xx_fn = self._hessian_exact(fn=self._lagrangian)  # N-by-N
+        elif direction == Direction.BFGS:
+            self._grad_lagr_x_fn = grad(self._lagrangian)
+            self._hess_lagr_xx_fn = self._hessian_bfgs_approx  # N-by-N
+        elif direction == Direction.STEEPEST_DESCENT:
+            self._hess_lagr_xx_fn = self._hessian_sd_approx  # N-by-N
+        else:
+            raise NotImplementedError
 
         self._reg = reg
 
@@ -104,6 +110,10 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
         converged, conv_penalty = self._convergence_fn(x_k, m_k)
         k = 0
+        B_prev = None
+        x_prev = None
+        g_prev = None
+        g_k = None
         while (not converged) and (k < self._max_iter):
             # calculate direction
             # KKT vector - r(x, lambda)
@@ -111,20 +121,17 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             c_vals = self._eval_constraints(x_k)
             kkt_state = jnp.concatenate((grad_loss_x, c_vals))
 
-            # Find a preconditioning matrix B for a gradient direction
             if self._direction == Direction.EXACT_NEWTON:
                 B_k = self._hess_lagr_xx_fn(x_k, m_k)
-            elif self._direction == Direction.GAUSS_NEWTON:
-                raise NotImplementedError
-                # B_k = grad_loss_x @ jnp.transpose(grad_loss_x)
-            elif self._direction == Direction.STEEPEST_DESCENT:
-                B_k = jnp.eye(N=self._x_dims)
+            elif self._direction == Direction.BFGS:
+                g_k = self._grad_lagr_x_fn(x_k, m_k)
+                B_k = self._hess_lagr_xx_fn(B_prev, g_k, g_prev, x_k, x_prev)
             else:
-                raise NotImplementedError
+                B_k = self._hess_lagr_xx_fn()
 
-            # TODO check H for PD + regularization (Powell's trick)
             B_k_is_pd = None
             if (self._direction != Direction.STEEPEST_DESCENT
+                    and self._direction != Direction.BFGS
                     and self._reg != HessianRegularization.NONE):
                 # TODO verify that Cholesky check is faster
                 B_k_is_pd = self._is_pd_matrix(B_k)
@@ -155,6 +162,12 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             # calculate step size (line search)
             # curr_x, grad_loss_x, direction
             alpha_k = self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k)
+
+            # update params for BFGS
+            if self._direction == Direction.BFGS:
+                B_prev = B_k
+                x_prev = x_k
+                g_prev = g_k
 
             # save cache + logs
             loss = self._loss_fn(x_k)
