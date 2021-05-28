@@ -6,6 +6,7 @@ from .constants import SolverType
 from .fom.gd import gd
 from .som.newton import newton
 from .constr.constr_newton import ConstrainedNewtonSolver
+from .constr.sqp import SQP
 
 
 def solve(
@@ -24,6 +25,8 @@ def solve(
             solver = ConstrainedNewtonSolver(loss_fn=loss_fn, **kwargs)
         else:
             return newton(loss_fn=loss_fn, **kwargs)
+    elif solver_type == SolverType.SQP:
+        solver = SQP(loss_fn=loss_fn, **kwargs)
     elif solver_type == SolverType.HJB:
         raise NotImplementedError
     elif solver_type == SolverType.PMP:

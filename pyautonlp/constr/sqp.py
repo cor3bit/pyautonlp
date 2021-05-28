@@ -1,20 +1,22 @@
 import logging
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Optional, Union
 
+import numpy as np
 import jax.numpy as jnp
 from jax import grad
+from quadprog import solve_qp
 
 from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, HessianRegularization
 from pyautonlp.constr.constr_solver import ConstrainedSolver, CacheItem
 
 
-class ConstrainedNewtonSolver(ConstrainedSolver):
+class SQP(ConstrainedSolver):
     def __init__(
             self,
             loss_fn: Callable,
             eq_constr: List[Callable] = None,
             ineq_constr: List[Callable] = None,
-            guess: jnp.ndarray = None,
+            guess: Union[Tuple, jnp.ndarray] = None,
             direction: str = Direction.STEEPEST_DESCENT,
             reg: str = HessianRegularization.NONE,
             line_search: str = LineSearch.CONST,
@@ -29,7 +31,7 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             **kwargs
     ):
         # logger
-        self._logger = logging.getLogger('newton_solver')
+        self._logger = logging.getLogger('sqp_solver')
         self._logger.setLevel(logging.INFO if verbose else logging.WARNING)
         self._logger.info(f'Initializing solver.')
 
@@ -46,18 +48,17 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         self._logger.info(f'Dimensions of the state vector: {self._x_dims}.')
 
         # constraints
-        if eq_constr is None or not eq_constr:
-            raise ValueError('Equality constraints not found.')
-        if ineq_constr is not None:
-            raise ValueError('Inequality constraints found for Newton solver.')
+        self._constr_fns = []
+        if eq_constr is not None and eq_constr:
+            self._constr_fns.extend(eq_constr)
+        if ineq_constr is not None and ineq_constr:
+            self._constr_fns.extend(ineq_constr)
 
-        self._eq_constr = eq_constr
-        self._constr_fns = eq_constr
-        self._multiplier_dims = len(eq_constr)
-
+        assert self._constr_fns
+        self._multiplier_dims = len(self._constr_fns)
         self._logger.info(f'Dimensions of the multiplier vector: {self._multiplier_dims}.')
-
         self._initial_multipliers = jnp.zeros(shape=(self._multiplier_dims,), dtype=jnp.float32)
+        self._n_eq = 0 if eq_constr is None else len(eq_constr)
 
         # convergence
         self._convergence_fn = self._get_convergence_fn(conv_criteria)
@@ -99,9 +100,6 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         m_k = self._initial_multipliers
         self._logger.info(f'Initial multipliers are: {m_k}.')
 
-        kkt_n = self._x_dims + self._multiplier_dims
-        kkt_matrix = jnp.zeros(shape=(kkt_n, kkt_n), dtype=jnp.float32)
-
         converged, conv_penalty = self._convergence_fn(x_k, m_k)
         k = 0
         B_prev = None
@@ -110,10 +108,8 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         g_k = None
         while (not converged) and (k < self._max_iter):
             # calculate direction
-            # KKT vector - r(x, lambda)
             grad_loss_x = self._grad_loss_x_fn(x_k)
-            c_vals = self._eval_constraints(x_k)
-            kkt_state = jnp.concatenate((grad_loss_x, c_vals))
+            c_k = self._eval_constraints(x_k)
 
             if self._direction == Direction.EXACT_NEWTON:
                 B_k = self._hess_lagr_xx_fn(x_k, m_k)
@@ -144,17 +140,11 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
                         # TODO modified Cholesky
                         raise NotImplementedError
 
-            # Form KKT matrix, r'(x, lambda)
-            kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(B_k)
+            # Find direction by solving QP
             constr_grad_x = self._eval_constraint_gradients(x_k)
-            kkt_matrix = kkt_matrix.at[:self._x_dims, self._x_dims:].set(constr_grad_x)
-            kkt_matrix = kkt_matrix.at[self._x_dims:, :self._x_dims].set(jnp.transpose(constr_grad_x))
-
-            # Note: state is multiplied by (-1)
-            d_k = jnp.linalg.solve(kkt_matrix, -kkt_state)
+            d_k = self._solve_qp(B_k, grad_loss_x, c_k, constr_grad_x)
 
             # calculate step size (line search)
-            # curr_x, grad_loss_x, direction
             alpha_k = self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k)
 
             # update params for BFGS
@@ -193,6 +183,22 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         info = (converged, loss, k, self._cache)
 
         return x_k, info
+
+    def _solve_qp(self, B_k, grad_loss_x, c_k, constr_grad_x):
+        # convert to numpy
+        # TODO consider np.asarray()
+        G = np.array(B_k, dtype=np.double)
+        a = np.array(grad_loss_x, dtype=np.double)
+        b = np.array(c_k, dtype=np.double)
+        C = np.array(constr_grad_x, dtype=np.double) * (-1.)
+
+        # solve QP
+        xf, f, xu, iters, lagr, iact = solve_qp(G, a, C, b, meq=self._n_eq)
+
+        # translate back to JAX
+        d_k = jnp.array(np.concatenate((xf, lagr)))
+
+        return d_k
 
 
 def flip_eig(e, delta):

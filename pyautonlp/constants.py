@@ -5,6 +5,9 @@ class SolverType:
     # Second order methods
     NEWTON = 'newton'
 
+    # Constrained
+    SQP = 'sqp'
+
     # Optimal control methods
     HJB = 'hjb'
     PMP = 'pmp'

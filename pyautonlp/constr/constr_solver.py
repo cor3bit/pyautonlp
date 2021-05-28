@@ -1,10 +1,13 @@
 from functools import partial
 from typing import Tuple, Callable
+from collections import namedtuple
 
 import jax.numpy as jnp
 
 from pyautonlp.constants import ConvergenceCriteria, LineSearch
 from pyautonlp.solver import Solver
+
+CacheItem = namedtuple('CacheItem', 'x m loss alpha x_dir H_pd penalty sigma')
 
 
 class ConstrainedSolver(Solver):
@@ -77,7 +80,7 @@ class ConstrainedSolver(Solver):
     def _constant_alpha(self, **kwargs):
         return self._alpha
 
-    def _backtrack(self, x_k, grad_loss_x, direction, armijo=False, merit=False, max_iter=20):
+    def _backtrack(self, x_k, grad_loss_x, direction, armijo=False, merit=False, max_iter=15):
         alpha = 1.
 
         direction_x = direction[:self._x_dims]
