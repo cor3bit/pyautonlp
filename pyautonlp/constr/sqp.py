@@ -26,7 +26,7 @@ class SQP(ConstrainedSolver):
             sigma: float = 1.0,  # relevant for Backtracking + Merit Function line search
             conv_criteria: str = ConvergenceCriteria.KKT_VIOLATION,
             conv_tol: float = 1e-8,
-            max_iter: int = 500,
+            max_iter: int = 50,
             verbose: bool = False,
             **kwargs
     ):
@@ -48,17 +48,19 @@ class SQP(ConstrainedSolver):
         self._logger.info(f'Dimensions of the state vector: {self._x_dims}.')
 
         # constraints
+        self._eq_constr = eq_constr
+        self._ineq_constr = ineq_constr
         self._constr_fns = []
         if eq_constr is not None and eq_constr:
             self._constr_fns.extend(eq_constr)
         if ineq_constr is not None and ineq_constr:
             self._constr_fns.extend(ineq_constr)
-
         assert self._constr_fns
+
         self._multiplier_dims = len(self._constr_fns)
-        self._logger.info(f'Dimensions of the multiplier vector: {self._multiplier_dims}.')
         self._initial_multipliers = jnp.zeros(shape=(self._multiplier_dims,), dtype=jnp.float32)
         self._n_eq = 0 if eq_constr is None else len(eq_constr)
+        self._logger.info(f'Dimensions of the multiplier vector: {self._multiplier_dims}.')
 
         # convergence
         self._convergence_fn = self._get_convergence_fn(conv_criteria)
@@ -190,13 +192,14 @@ class SQP(ConstrainedSolver):
         G = np.array(B_k, dtype=np.double)
         a = np.array(grad_loss_x, dtype=np.double)
         b = np.array(c_k, dtype=np.double)
-        C = np.array(constr_grad_x, dtype=np.double) * (-1.)
+        C = np.array(constr_grad_x, dtype=np.double)
 
         # solve QP
         xf, f, xu, iters, lagr, iact = solve_qp(G, a, C, b, meq=self._n_eq)
 
         # translate back to JAX
         d_k = jnp.array(np.concatenate((xf, lagr)))
+        d_k *= -1.
 
         return d_k
 

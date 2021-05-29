@@ -25,7 +25,7 @@ if __name__ == '__main__':
         eq_constr=[equality_constr],
 
         # solver params
-        solver_type='newton',
+        solver_type='sqp',
         guess=(0., 1.),
         direction=Direction.EXACT_NEWTON,
         reg=HessianRegularization.EIGEN_DELTA,
@@ -35,8 +35,8 @@ if __name__ == '__main__':
         gamma=0.1,
         sigma=1.0,
         conv_criteria=ConvergenceCriteria.KKT_VIOLATION,
-        conv_tol=1e-7,
-        max_iter=200,
+        conv_tol=1e-6,
+        max_iter=100,
 
         # level of details
         verbose=True,

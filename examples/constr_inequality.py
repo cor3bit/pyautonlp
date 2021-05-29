@@ -20,8 +20,6 @@ def inequality_constr2(x):
     return -x[1]
 
 
-# guess (0., 1.), (-1, -1.),
-
 if __name__ == '__main__':
     sln, info = pan.solve(
         # problem definition
@@ -31,7 +29,7 @@ if __name__ == '__main__':
 
         # solver params
         solver_type='sqp',
-        guess=(0, 1),
+        guess=(4, 4),
         direction=Direction.EXACT_NEWTON,
         reg=HessianRegularization.EIGEN_DELTA,
         line_search=LineSearch.BT_MERIT,
@@ -48,4 +46,3 @@ if __name__ == '__main__':
     )
 
     print(sln)
-    # print(info)

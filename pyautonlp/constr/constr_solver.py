@@ -11,6 +11,8 @@ CacheItem = namedtuple('CacheItem', 'x m loss alpha x_dir H_pd penalty sigma')
 
 
 class ConstrainedSolver(Solver):
+    _eq_constr = None
+    _ineq_constr = None
     _constr_fns = None
     _grad_loss_x_fn = None
     _grad_constr_x_fns = None
@@ -26,6 +28,18 @@ class ConstrainedSolver(Solver):
 
     def _lagrangian(self, x, multipliers):
         return self._loss_fn(x) + jnp.sum(jnp.array([c_fn(x) for c_fn in self._constr_fns]) * multipliers)
+
+    def _eval_eq_constraints(self, x):
+        if self._eq_constr is None:
+            return .0
+
+        return jnp.array([c_fn(x) for c_fn in self._eq_constr], dtype=jnp.float32)
+
+    def _eval_ineq_constraints(self, x):
+        if self._ineq_constr is None:
+            return .0
+
+        return jnp.array([c_fn(x) for c_fn in self._ineq_constr], dtype=jnp.float32)
 
     def _eval_constraints(self, x):
         return jnp.array([c_fn(x) for c_fn in self._constr_fns], dtype=jnp.float32)
@@ -55,9 +69,11 @@ class ConstrainedSolver(Solver):
             raise ValueError(f'Unrecognized convergence criteria: {criteria}.')
 
     def _kkt_violation(self, x_k, m_k, **kwargs):
-        max_c_violation = jnp.max(jnp.abs(self._eval_constraints(x_k)))
-        max_lagr_grad_violation = jnp.max(jnp.abs(self._grad_lagr_x_fn(x_k, m_k)))
-        max_viol = jnp.maximum(max_c_violation, max_lagr_grad_violation)
+        max_c_eq = jnp.max(jnp.abs(self._eval_eq_constraints(x_k)))
+        max_c_ineq = jnp.max(jnp.clip(self._eval_ineq_constraints(x_k), a_min=0))
+        max_lagr_grad = jnp.max(jnp.abs(self._grad_lagr_x_fn(x_k, m_k)))
+        max_viol = jnp.maximum(jnp.maximum(max_c_eq, max_c_ineq), max_lagr_grad)
+
         return max_viol <= self._tol, max_viol
 
     def _get_step_size_fn(
@@ -80,7 +96,7 @@ class ConstrainedSolver(Solver):
     def _constant_alpha(self, **kwargs):
         return self._alpha
 
-    def _backtrack(self, x_k, grad_loss_x, direction, armijo=False, merit=False, max_iter=15):
+    def _backtrack(self, x_k, grad_loss_x, direction, armijo=False, merit=False, max_iter=10):
         alpha = 1.
 
         direction_x = direction[:self._x_dims]
@@ -103,10 +119,17 @@ class ConstrainedSolver(Solver):
 
         return alpha
 
-    def _merit_fn(self, x):
-        return self._loss_fn(x) + self._sigma * jnp.linalg.norm(self._eval_constraints(x), ord=1)
+    def _merit_adj(self, x):
+        eq_norm = 0. if self._eq_constr is None else jnp.linalg.norm(self._eval_eq_constraints(x), ord=1)
+        ineq_norm = 0. if self._ineq_constr is None else jnp.linalg.norm(
+            jnp.clip(self._eval_ineq_constraints(x), a_min=0), ord=1)
 
-    def _calc_armijo_adj(self, curr_x, alpha, grad_loss_x, direction_x, armijo, merit):
+        return self._sigma * (eq_norm + ineq_norm)
+
+    def _merit_fn(self, x):
+        return self._loss_fn(x) + self._merit_adj(x)
+
+    def _calc_armijo_adj(self, x, alpha, grad_loss_x, direction_x, armijo, merit):
         if not armijo:
             return 0.
 
@@ -114,5 +137,4 @@ class ConstrainedSolver(Solver):
         if not merit:
             return self._gamma * alpha * direct_deriv
 
-        return self._gamma * alpha * (
-                direct_deriv - self._sigma * jnp.linalg.norm(self._eval_constraints(curr_x), ord=1))
+        return self._gamma * alpha * (direct_deriv - self._merit_adj(x))
