@@ -69,9 +69,15 @@ class Visualizer:
         plt.contour(xx, yy, zz, 30, cmap='jet')
 
         # plot constraints
-        for c_fn in self._eq_constr:
-            cvals = c_fn(xx, yy)
-            plt.contour(xx, yy, cvals, [0], colors='k')
+        if self._eq_constr is not None:
+            for c_fn in self._eq_constr:
+                cvals = c_fn(xx, yy)
+                plt.contour(xx, yy, cvals, [0], colors='k')
+
+        if self._ineq_constr is not None:
+            for c_fn in self._ineq_constr:
+                cvals = c_fn(xx, yy)
+                plt.contour(xx, yy, cvals, [0], colors='k')
 
         # plot optimizer path
         if self._solver_caches:
@@ -91,7 +97,7 @@ class Visualizer:
             for cache, name in zip(self._solver_caches, self._cache_names):
                 times = np.fromiter(cache.keys(), dtype=float)
                 losses = np.array([item.loss for item in cache.values()])
-                sns.lineplot(x=times, y=losses, label=name)
+                sns.lineplot(x=times, y=losses, label=name).set_title('Loss(t)')
 
         # ax.set_title('Convergence')
         plt.legend()
@@ -102,7 +108,7 @@ class Visualizer:
             for cache, name in zip(self._solver_caches, self._cache_names):
                 times = np.fromiter(cache.keys(), dtype=float)
                 penalties = np.array([item.penalty for item in cache.values()])
-                sns.lineplot(x=times, y=penalties, label=name)
+                sns.lineplot(x=times, y=penalties, label=name).set_title('KKT Penalty(t)')
 
         # ax.set_title('Convergence')
         plt.legend()
@@ -113,9 +119,8 @@ class Visualizer:
             for cache, name in zip(self._solver_caches, self._cache_names):
                 times = np.fromiter(cache.keys(), dtype=float)
                 alphas = np.array([item.alpha for item in cache.values()])
-                sns.lineplot(x=times[:-1], y=alphas[:-1], label=name)
+                sns.lineplot(x=times[:-1], y=alphas[:-1], label=name).set_title('Alpha(t)')
 
-        # ax.set_title('Convergence')
         plt.legend()
         plt.show()
 
