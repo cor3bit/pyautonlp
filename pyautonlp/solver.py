@@ -64,5 +64,17 @@ class Solver(ABC):
 
             return B_k
 
+    def _hessian_gn_approx(self, g_k, **kwargs) -> jnp.ndarray:
+        return jnp.transpose(g_k) @ g_k
+
     def _hessian_sd_approx(self, **kwargs) -> jnp.ndarray:
         return jnp.eye(N=self._x_dims)
+
+    @staticmethod
+    def _flip_eig(e, delta):
+        if jnp.isclose(e, 0.):
+            return delta
+        elif e < 0:
+            return -e
+        else:
+            return e
