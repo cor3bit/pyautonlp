@@ -88,6 +88,9 @@ class SQP(ConstrainedSolver):
         elif direction == Direction.BFGS:
             self._grad_lagr_x_fn = grad(self._lagrangian)
             self._hess_lagr_xx_fn = self._hessian_bfgs_approx  # N-by-N
+        elif direction == Direction.GAUSS_NEWTON:
+            self._grad_lagr_x_fn = grad(self._lagrangian)
+            self._hess_lagr_xx_fn = self._hessian_gn_approx  # N-by-N
         elif direction == Direction.STEEPEST_DESCENT:
             self._hess_lagr_xx_fn = self._hessian_sd_approx  # N-by-N
         else:
@@ -109,18 +112,19 @@ class SQP(ConstrainedSolver):
         g_prev = None
         g_k = None
         while (not converged) and (k < self._max_iter):
-            # calculate direction
-            grad_loss_x = self._grad_loss_x_fn(x_k)
-            c_k = self._eval_constraints(x_k)
-
+            # calculate B_k
             if self._direction == Direction.EXACT_NEWTON:
                 B_k = self._hess_lagr_xx_fn(x_k, m_k)
             elif self._direction == Direction.BFGS:
                 g_k = self._grad_lagr_x_fn(x_k, m_k)
                 B_k = self._hess_lagr_xx_fn(B_prev, g_k, g_prev, x_k, x_prev)
+            elif self._direction == Direction.GAUSS_NEWTON:
+                g_k = self._grad_lagr_x_fn(x_k, m_k)
+                B_k = self._hess_lagr_xx_fn(g_k)
             else:
                 B_k = self._hess_lagr_xx_fn()
 
+            # ensure B_k is pd
             B_k_is_pd = None
             if (self._direction != Direction.STEEPEST_DESCENT
                     and self._direction != Direction.BFGS
@@ -136,13 +140,15 @@ class SQP(ConstrainedSolver):
                     elif self._reg == HessianRegularization.EIGEN_FLIP:
                         delta = 1e-5
                         eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
-                        eig_vals_modified = jnp.array([flip_eig(e, delta) for e in eig_vals])
+                        eig_vals_modified = jnp.array([self._flip_eig(e, delta) for e in eig_vals])
                         B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
                     else:
                         # TODO modified Cholesky
                         raise NotImplementedError
 
-            # Find direction by solving QP
+            # find direction by solving QP
+            grad_loss_x = self._grad_loss_x_fn(x_k)
+            c_k = self._eval_constraints(x_k)
             constr_grad_x = self._eval_constraint_gradients(x_k)
             d_k = self._solve_qp(B_k, grad_loss_x, c_k, constr_grad_x)
 
@@ -202,12 +208,3 @@ class SQP(ConstrainedSolver):
         d_k *= -1.
 
         return d_k
-
-
-def flip_eig(e, delta):
-    if jnp.isclose(e, 0.):
-        return delta
-    elif e < 0:
-        return -e
-    else:
-        return e

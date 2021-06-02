@@ -7,17 +7,6 @@ from pyautonlp.constr.sqp import SQP
 
 
 @pytest.fixture
-def setup_eq():
-    def loss(x):
-        return 0.5 * jnp.dot(x, x) + jnp.sum(x)
-
-    def equality_constr(x):
-        return jnp.dot(x, x) - 1
-
-    return loss, equality_constr
-
-
-@pytest.fixture
 def setup_qp():
     def loss(x):
         return 0.5 * jnp.dot(x, x)
@@ -34,9 +23,32 @@ def setup_qp():
     return loss, equality_constr, inequality_constr1, inequality_constr2
 
 
+@pytest.fixture
+def setup_eq():
+    def loss(x):
+        return 0.5 * jnp.dot(x, x) + jnp.sum(x)
+
+    def equality_constr(x):
+        return jnp.dot(x, x) - 1
+
+    return loss, equality_constr
+
+
+@pytest.fixture
+def setup_ineq():
+    def loss(x):
+        return 0.5 * jnp.dot(x, x) + jnp.sum(x)
+
+    def eq_constr(x):
+        return jnp.dot(x, x) - 1
+
+    def ineq_constr(x):
+        return 0.5 - x[0] * x[0] - x[1]
+
+    return loss, eq_constr, ineq_constr
+
+
 def test_sqp_qp(setup_qp):
-    #
-    # info = (converged, loss, k, self._cache)
     loss, equality_constr, inequality_constr1, inequality_constr2 = setup_qp
 
     sqp = SQP(
@@ -52,7 +64,7 @@ def test_sqp_qp(setup_qp):
         sigma=1.0,
         conv_tol=1e-6,
         max_iter=5,
-        verbose=True,
+        verbose=False,
     )
 
     x_star, info = sqp.solve()
@@ -67,15 +79,14 @@ def test_sqp_qp(setup_qp):
     assert 1.0 == pytest.approx(x2)
 
 
-@pytest.mark.skip
-def test_sqp_eq_only(setup_eq):
-    loss, equality_constr = setup_eq
+def test_sqp_ineq(setup_ineq):
+    loss, eq_constr, ineq_constr = setup_ineq
 
     sqp = SQP(
         loss_fn=loss,
-        eq_constr=[equality_constr],
-        ineq_constr=None,
-        guess=(0, 1),
+        eq_constr=[eq_constr],
+        ineq_constr=[ineq_constr],
+        guess=(-1, -1),
         direction=Direction.EXACT_NEWTON,
         reg=HessianRegularization.EIGEN_DELTA,
         line_search=LineSearch.BT_MERIT_ARMIJO,
@@ -84,12 +95,16 @@ def test_sqp_eq_only(setup_eq):
         sigma=1.0,
         conv_tol=1e-6,
         max_iter=50,
-        verbose=True,
+        verbose=False,
     )
 
     x_star, info = sqp.solve()
+    converged, loss, k, cache = info
 
-    print(x_star)
-    print(info)
+    assert not converged
+    assert k == 50
+    assert -0.79663026 == pytest.approx(loss, abs=1e-6)
 
-    assert x_star is not None
+    x1, x2 = x_star
+    assert -0.93060487508 == pytest.approx(x1, abs=1e-8)
+    assert -0.36602541804 == pytest.approx(x2, abs=1e-8)
