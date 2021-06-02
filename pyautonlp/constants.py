@@ -7,6 +7,7 @@ class SolverType:
 
     # Constrained
     SQP = 'sqp'
+    IP = 'ip'
 
     # Optimal control methods
     HJB = 'hjb'
@@ -39,3 +40,9 @@ class HessianRegularization:
 class ConvergenceCriteria:
     KKT_VIOLATION = 'Violation of KKT conditions'
     STEP_DIFF_NORM = 'Step Difference Norm'
+
+
+class KKTForm:
+    FULL = 'Full'
+    AUGMENTED = 'Augmented'
+    NORMAL = 'Normal'
