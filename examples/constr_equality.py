@@ -5,28 +5,22 @@ from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, Hess
 
 
 def loss(x):
-    # min z = 0.5 * x_T * x + 1_T * x
-    # s.t. x_T * x = 1
     return 0.5 * jnp.dot(x, x) + jnp.sum(x)
 
 
 def equality_constr(x):
-    # min z = 0.5 * x_T * x + 1_T * x
-    # s.t. x_T * x = 1
     return jnp.dot(x, x) - 1
 
 
-# guess (0., 1.), (-1, -1.),
-
-if __name__ == '__main__':
-    sln, info = pan.solve(
+def solve_newton(guess):
+    return pan.solve(
         # problem definition
         loss_fn=loss,
         eq_constr=[equality_constr],
 
         # solver params
-        solver_type='sqp',
-        guess=(0., 1.),
+        solver_type='newton',
+        guess=guess,
         direction=Direction.EXACT_NEWTON,
         reg=HessianRegularization.EIGEN_DELTA,
         line_search=LineSearch.BT_MERIT_ARMIJO,
@@ -42,5 +36,31 @@ if __name__ == '__main__':
         verbose=True,
     )
 
-    print(sln)
-    # print(info)
+
+if __name__ == '__main__':
+    pt_names = ['A', 'B', 'C', 'D', 'E']
+
+    initial_guesses = [
+        (0., 1.), (1., 1.), (0.5, 1.), (-1., -1.), (-1., 1.),
+    ]
+
+    # solve
+    caches = []
+    for g in initial_guesses:
+        sln, info = solve_newton(g)
+        print(sln)
+        cache = info[-1]
+        caches.append(cache)
+
+    # visualize
+    for cache, name in zip(caches, pt_names):
+        viz = pan.Visualizer(
+            loss_fn=lambda x, y: 0.5 * x * x + 0.5 * y * y + x + y,
+            eq_constr=[lambda x, y: x * x + y * y - 1],
+            solver_caches=[cache],
+            cache_names=[name],
+            x1_bounds=(-2, 2),
+            x2_bounds=(-2, 2),
+        )
+
+        viz.plot_convergence()

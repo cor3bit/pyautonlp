@@ -26,6 +26,7 @@ def test_gd_quadratic_exact():
     assert 0.0 == pytest.approx(x2, abs=1e-5)
 
 
+@pytest.mark.skip('GN not implemented for Unconstr Newton!')
 def test_gd_quadratic_gn():
     gd = Newton(
         loss_fn=lambda x: jnp.sum(x * x),

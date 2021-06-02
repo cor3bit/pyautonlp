@@ -1,5 +1,5 @@
 import logging
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Union
 
 import jax.numpy as jnp
 from jax import grad
@@ -8,13 +8,13 @@ from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, Hess
 from pyautonlp.constr.constr_solver import ConstrainedSolver, CacheItem
 
 
-class ConstrainedNewtonSolver(ConstrainedSolver):
+class ConstrainedNewton(ConstrainedSolver):
     def __init__(
             self,
             loss_fn: Callable,
             eq_constr: List[Callable] = None,
             ineq_constr: List[Callable] = None,
-            guess: jnp.ndarray = None,
+            guess: Union[Tuple, jnp.ndarray] = None,
             direction: str = Direction.STEEPEST_DESCENT,
             reg: str = HessianRegularization.NONE,
             line_search: str = LineSearch.CONST,
@@ -29,7 +29,7 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
             **kwargs
     ):
         # logger
-        self._logger = logging.getLogger('newton_solver')
+        self._logger = logging.getLogger('newton_constr')
         self._logger.setLevel(logging.INFO if verbose else logging.WARNING)
         self._logger.info(f'Initializing solver.')
 
@@ -81,10 +81,16 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
 
         self._direction = direction
         if direction == Direction.EXACT_NEWTON:
+            # TODO gradient of lagrangian
             self._hess_lagr_xx_fn = self._hessian_exact(fn=self._lagrangian)  # N-by-N
         elif direction == Direction.BFGS:
+            # TODO gradient of lagrangian - is analytical!!!
             self._grad_lagr_x_fn = grad(self._lagrangian)
             self._hess_lagr_xx_fn = self._hessian_bfgs_approx  # N-by-N
+        elif direction == Direction.GAUSS_NEWTON:
+            # TODO gradient of lagrangian - is analytical!!!
+            self._grad_lagr_x_fn = grad(self._lagrangian)
+            self._hess_lagr_xx_fn = self._hessian_gn_approx  # N-by-N
         elif direction == Direction.STEEPEST_DESCENT:
             self._hess_lagr_xx_fn = self._hessian_sd_approx  # N-by-N
         else:
@@ -109,20 +115,19 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         g_prev = None
         g_k = None
         while (not converged) and (k < self._max_iter):
-            # calculate direction
-            # KKT vector - r(x, lambda)
-            grad_loss_x = self._grad_loss_x_fn(x_k)
-            c_vals = self._eval_constraints(x_k)
-            kkt_state = jnp.concatenate((grad_loss_x, c_vals))
-
+            # calculate B_k
             if self._direction == Direction.EXACT_NEWTON:
                 B_k = self._hess_lagr_xx_fn(x_k, m_k)
             elif self._direction == Direction.BFGS:
                 g_k = self._grad_lagr_x_fn(x_k, m_k)
                 B_k = self._hess_lagr_xx_fn(B_prev, g_k, g_prev, x_k, x_prev)
+            elif self._direction == Direction.GAUSS_NEWTON:
+                g_k = self._grad_lagr_x_fn(x_k, m_k)
+                B_k = self._hess_lagr_xx_fn(g_k)
             else:
                 B_k = self._hess_lagr_xx_fn()
 
+            # ensure B_k is pd
             B_k_is_pd = None
             if (self._direction != Direction.STEEPEST_DESCENT
                     and self._direction != Direction.BFGS
@@ -138,23 +143,28 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
                     elif self._reg == HessianRegularization.EIGEN_FLIP:
                         delta = 1e-5
                         eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
-                        eig_vals_modified = jnp.array([flip_eig(e, delta) for e in eig_vals])
+                        eig_vals_modified = jnp.array([self._flip_eig(e, delta) for e in eig_vals])
                         B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
                     else:
                         # TODO modified Cholesky
                         raise NotImplementedError
 
-            # Form KKT matrix, r'(x, lambda)
+            # build KKT matrix, r'(x, lambda)
             kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(B_k)
             constr_grad_x = self._eval_constraint_gradients(x_k)
             kkt_matrix = kkt_matrix.at[:self._x_dims, self._x_dims:].set(constr_grad_x)
             kkt_matrix = kkt_matrix.at[self._x_dims:, :self._x_dims].set(jnp.transpose(constr_grad_x))
 
+            # build KKT vector, r(x, lambda)
+            grad_loss_x = self._grad_loss_x_fn(x_k)
+            c_vals = self._eval_constraints(x_k)
+            kkt_state = jnp.concatenate((grad_loss_x, c_vals))
+
+            # calculate direction
             # Note: state is multiplied by (-1)
             d_k = jnp.linalg.solve(kkt_matrix, -kkt_state)
 
             # calculate step size (line search)
-            # curr_x, grad_loss_x, direction
             alpha_k = self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k)
 
             # update params for BFGS
@@ -193,12 +203,3 @@ class ConstrainedNewtonSolver(ConstrainedSolver):
         info = (converged, loss, k, self._cache)
 
         return x_k, info
-
-
-def flip_eig(e, delta):
-    if jnp.isclose(e, 0.):
-        return delta
-    elif e < 0:
-        return -e
-    else:
-        return e
