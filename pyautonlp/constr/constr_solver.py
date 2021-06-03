@@ -44,6 +44,11 @@ class ConstrainedSolver(Solver):
     def _eval_constraints(self, x):
         return jnp.array([c_fn(x) for c_fn in self._constr_fns], dtype=jnp.float32)
 
+    def _eval_constraints_with_slack(self, x, slack):
+        eq_part = jnp.array([c_fn(x) for c_fn in self._eq_constr], dtype=jnp.float32)
+        ineq_part = jnp.array([c_fn(x) + s for s, c_fn in zip(slack, self._ineq_constr)], dtype=jnp.float32)
+        return jnp.concatenate((eq_part, ineq_part))
+
     def _eval_constraint_gradients(self, x):
         # should return size NxM matrix
         constraint_grads = jnp.empty((self._x_dims, self._multiplier_dims), dtype=jnp.float32)
@@ -53,9 +58,9 @@ class ConstrainedSolver(Solver):
 
         return constraint_grads
 
-    def _grad_lagr_x_fn(self, x, multipliers):
-        # should return size Nx1 vector
-        return self._grad_loss_x_fn(x) + self._eval_constraint_gradients(x) @ multipliers
+    # def _grad_lagr_x_fn(self, x, multipliers):
+    #     # should return size Nx1 vector
+    #     return self._grad_loss_x_fn(x) + self._eval_constraint_gradients(x) @ multipliers
 
     def _get_convergence_fn(
             self,
@@ -69,9 +74,11 @@ class ConstrainedSolver(Solver):
             raise ValueError(f'Unrecognized convergence criteria: {criteria}.')
 
     def _kkt_violation(self, x_k, m_k, **kwargs):
+        # TODO optimize
         max_c_eq = jnp.max(jnp.abs(self._eval_eq_constraints(x_k)))
         max_c_ineq = jnp.max(jnp.clip(self._eval_ineq_constraints(x_k), a_min=0))
         max_lagr_grad = jnp.max(jnp.abs(self._grad_lagr_x_fn(x_k, m_k)))
+
         max_viol = jnp.maximum(jnp.maximum(max_c_eq, max_c_ineq), max_lagr_grad)
 
         return max_viol <= self._tol, max_viol
@@ -121,6 +128,7 @@ class ConstrainedSolver(Solver):
 
     def _merit_adj(self, x):
         eq_norm = 0. if self._eq_constr is None else jnp.linalg.norm(self._eval_eq_constraints(x), ord=1)
+
         ineq_norm = 0. if self._ineq_constr is None else jnp.linalg.norm(
             jnp.clip(self._eval_ineq_constraints(x), a_min=0), ord=1)
 

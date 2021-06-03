@@ -2,7 +2,7 @@ import logging
 from typing import List, Tuple, Callable, Optional, Union
 
 import jax.numpy as jnp
-from jax import grad
+from jax import grad, hessian, jacfwd, jacrev, jit
 
 from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, HessianRegularization, KKTForm
 from pyautonlp.constr.constr_solver import ConstrainedSolver, CacheItem
@@ -47,21 +47,23 @@ class IP(ConstrainedSolver):
         self._logger.info(f'Dimensions of the state vector: {self._x_dims}.')
 
         # constraints
-        self._eq_constr = eq_constr
-        self._ineq_constr = ineq_constr
-        self._constr_fns = []
-        if eq_constr is not None and eq_constr:
-            self._constr_fns.extend(eq_constr)
-        if ineq_constr is not None and ineq_constr:
-            self._constr_fns.extend(ineq_constr)
+        self._eq_constr = [] if eq_constr is None else eq_constr
+        self._ineq_constr = [] if eq_constr is None else ineq_constr
+        self._constr_fns = self._eq_constr + self._ineq_constr
 
-        assert self._constr_fns
         assert self._ineq_constr
+        assert self._constr_fns
 
-        self._multiplier_dims = len(self._constr_fns)
-        self._initial_multipliers = jnp.zeros(shape=(self._multiplier_dims,), dtype=jnp.float32)
-        self._n_eq = 0 if eq_constr is None else len(eq_constr)
-        self._logger.info(f'Dimensions of the multiplier vector: {self._multiplier_dims}.')
+        self._eq_mult_dims = len(self._eq_constr)
+        self._logger.info(f'Dimensions of the equality multiplier vector: {self._eq_mult_dims}.')
+
+        self._ineq_mult_dims = len(self._ineq_constr)
+        self._logger.info(f'Dimensions of the equality multiplier vector: {self._ineq_mult_dims}.')
+        self._multiplier_dims = self._eq_mult_dims + self._ineq_mult_dims
+
+        self._initial_eq_mult = jnp.zeros(shape=(self._eq_mult_dims,), dtype=jnp.float32)
+        self._initial_ineq_mult = jnp.ones(shape=(self._ineq_mult_dims,), dtype=jnp.float32)
+        self._initial_slack = jnp.ones(shape=(self._ineq_mult_dims,), dtype=jnp.float32)
 
         # convergence
         self._convergence_fn = self._get_convergence_fn(conv_criteria)
@@ -78,14 +80,18 @@ class IP(ConstrainedSolver):
         # save intermediate step info
         self._cache = {}
 
-        # grad & hessian functions
+        # grad for loss & constraints
         # compile with JAX in advance
         self._grad_loss_x_fn = grad(self._loss_fn)  # N-by-1
-        self._grad_constr_x_fns = [grad(f) for f in self._constr_fns]
+        self._grad_eq_constr_x_fns = [grad(f) for f in self._eq_constr]
+        self._grad_ineq_constr_x_fns = [grad(f) for f in self._ineq_constr]
+        self._grad_constr_x_fns = self._grad_eq_constr_x_fns + self._grad_ineq_constr_x_fns
 
+        # grad for lagrangians
         self._direction = direction
         if direction == Direction.EXACT_NEWTON:
-            self._hess_lagr_xx_fn = self._hessian_exact(fn=self._ip_lagrangian)  # N-by-N
+            self._grad_lagr_x_fn = grad(self._ip_lagrangian)
+            self._hess_lagr_xx_fn = self._hessian_exact(self._ip_lagrangian)  # N-by-N
         elif direction == Direction.BFGS:
             self._grad_lagr_x_fn = grad(self._ip_lagrangian)
             self._hess_lagr_xx_fn = self._hessian_bfgs_approx  # N-by-N
@@ -100,16 +106,26 @@ class IP(ConstrainedSolver):
         self._reg = reg
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
+        tau = 1.
+
         x_k = self._initial_x
         self._logger.info(f'Initial guess is: {x_k}.')
 
-        m_k = self._initial_multipliers
-        self._logger.info(f'Initial multipliers are: {m_k}.')
+        eq_m_k = self._initial_eq_mult
+        ineq_m_k = self._initial_ineq_mult
+        s_k = self._initial_slack
+        # self._logger.info(f'Initial multipliers are: {m_k}.')
 
-        kkt_n = self._x_dims + self._multiplier_dims
+        # dimensions
+        n_x = self._x_dims
+        n_g = self._eq_mult_dims
+        n_h = self._ineq_mult_dims
+        kkt_n = n_x + n_g + 2 * n_h
+
         kkt_matrix = jnp.zeros(shape=(kkt_n, kkt_n), dtype=jnp.float32)
+        identity = jnp.eye(n_h, dtype=jnp.float32)
 
-        converged, conv_penalty = self._convergence_fn(x_k, m_k)
+        converged, conv_penalty = self._ip_convergence_fn(x_k, eq_m_k, ineq_m_k, s_k, tau)
         k = 0
         B_prev = None
         x_prev = None
@@ -118,12 +134,12 @@ class IP(ConstrainedSolver):
         while (not converged) and (k < self._max_iter):
             # calculate B_k
             if self._direction == Direction.EXACT_NEWTON:
-                B_k = self._hess_lagr_xx_fn(x_k, m_k)
+                B_k = self._hess_lagr_xx_fn(x_k, eq_m_k, ineq_m_k, s_k, tau)
             elif self._direction == Direction.BFGS:
-                g_k = self._grad_lagr_x_fn(x_k, m_k)
+                g_k = self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k)
                 B_k = self._hess_lagr_xx_fn(B_prev, g_k, g_prev, x_k, x_prev)
             elif self._direction == Direction.GAUSS_NEWTON:
-                g_k = self._grad_lagr_x_fn(x_k, m_k)
+                g_k = self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k)
                 B_k = self._hess_lagr_xx_fn(g_k)
             else:
                 B_k = self._hess_lagr_xx_fn()
@@ -151,22 +167,37 @@ class IP(ConstrainedSolver):
                         raise NotImplementedError
 
             # build KKT matrix, r'(x, lambda, mu, s)
-            kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(B_k)
+            # insert B_k
+            kkt_matrix = kkt_matrix.at[:n_x, :n_x].set(B_k)
+
+            # insert [nabla_g, nabla_h]
             constr_grad_x = self._eval_constraint_gradients(x_k)
-            kkt_matrix = kkt_matrix.at[:self._x_dims, self._x_dims:].set(constr_grad_x)
-            kkt_matrix = kkt_matrix.at[self._x_dims:, :self._x_dims].set(jnp.transpose(constr_grad_x))
+            kkt_matrix = kkt_matrix.at[:n_x, n_x:n_x + n_g + n_h].set(constr_grad_x)
+            kkt_matrix = kkt_matrix.at[n_x:n_x + n_g + n_h, :n_x].set(jnp.transpose(constr_grad_x))
+
+            # insert I
+            kkt_matrix = kkt_matrix.at[n_x + n_g:n_x + n_g + n_h, n_x + n_g + n_h:].set(identity)
+
+            # insert S_k
+            S_k = jnp.diag(s_k)
+            kkt_matrix = kkt_matrix.at[n_x + n_g + n_h:, n_x + n_g:n_x + n_g + n_h].set(S_k)
+
+            # insert M_k
+            M_k = jnp.diag(ineq_m_k)
+            kkt_matrix = kkt_matrix.at[n_x + n_g + n_h:, n_x + n_g + n_h:].set(M_k)
 
             # build KKT vector, r(x, lambda)
-            grad_loss_x = self._grad_loss_x_fn(x_k)
-            c_k = self._eval_constraints(x_k)
-            kkt_state = jnp.concatenate((grad_loss_x, c_k))
+            grad_lagr_x = self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k, s_k, tau)
+            c_k = self._eval_constraints_with_slack(x_k, s_k)
+            slack_component = M_k @ s_k - tau
+            kkt_state = jnp.concatenate((grad_lagr_x, c_k, slack_component))
 
             # calculate direction
             # Note: state is multiplied by (-1)
             d_k = jnp.linalg.solve(kkt_matrix, -kkt_state)
 
             # calculate step size (line search)
-            alpha_k = self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k)
+            alpha_k = None # self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k)
 
             # update params for BFGS
             if self._direction == Direction.BFGS:
@@ -181,15 +212,17 @@ class IP(ConstrainedSolver):
             self._cache[k] = cache_item
             self._logger.info(self._get_log_str(k, cache_item))
 
-            # update state
+            # update variables
             x_k += alpha_k * d_k[:self._x_dims]
             m_k = (1 - alpha_k) * m_k + alpha_k * d_k[self._x_dims:]
 
             # TODO check update sigma
             self._sigma = jnp.max(jnp.abs(m_k)) + 0.1
 
+            # TODO update tau
+
             # check convergence
-            converged, conv_penalty = self._convergence_fn(x_k, m_k)
+            converged, conv_penalty = self._ip_convergence_fn(x_k, eq_m_k, ineq_m_k, s_k, tau)
 
             # increment counter
             k += 1
@@ -205,9 +238,18 @@ class IP(ConstrainedSolver):
 
         return x_k, info
 
-    def _ip_lagrangian(self, x, multipliers, tau):
+    def _ip_lagrangian(self, x, eq_mult, ineq_mult, slack, tau):
         loss_x = self._loss_fn(x)
-        eq_penalty = jnp.sum(jnp.array([c_fn(x) for c_fn in self._eq_constr]) * multipliers[:self._n_eq])
-        ineq_penalty = -tau * jnp.sum(jnp.array([jnp.log(-c_fn(x)) for c_fn in self._ineq_constr]))
+        barrier = -tau * jnp.sum(jnp.log(slack))
+        eq_penalty = jnp.sum(jnp.array([c_fn(x) for c_fn in self._eq_constr]) * eq_mult)
+        ineq_penalty = jnp.sum((jnp.array([c_fn(x) for c_fn in self._ineq_constr]) + slack) * ineq_mult)
+        return loss_x + barrier + eq_penalty + ineq_penalty
 
-        return loss_x + eq_penalty + ineq_penalty
+    def _ip_convergence_fn(self, x_k, eq_m_k, ineq_m_k, s_k, tau):
+        max_c_eq = jnp.max(jnp.abs(self._eval_eq_constraints(x_k)))
+        max_c_ineq = jnp.max(jnp.clip(self._eval_ineq_constraints(x_k), a_min=0))
+        max_lagr_grad = jnp.max(jnp.abs(self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k, s_k, tau)))
+
+        max_viol = jnp.max(jnp.array([max_c_eq, max_c_ineq, max_lagr_grad, tau]))
+
+        return max_viol <= self._tol, max_viol
