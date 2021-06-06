@@ -77,6 +77,7 @@ class ConstrainedNewton(ConstrainedSolver):
         # grad & hessian functions
         # compile with JAX in advance
         self._grad_loss_x_fn = grad(self._loss_fn)  # N-by-1
+        self._grad_lagr_x_fn = grad(self._lagrangian)  # N-by-1
         self._grad_constr_x_fns = [grad(f) for f in self._constr_fns]
 
         self._direction = direction
@@ -118,6 +119,7 @@ class ConstrainedNewton(ConstrainedSolver):
             # calculate B_k
             if self._direction == Direction.EXACT_NEWTON:
                 B_k = self._hess_lagr_xx_fn(x_k, m_k)
+                # B_k = jnp.array([[1,0], [0,1]], dtype=jnp.float32)
             elif self._direction == Direction.BFGS:
                 g_k = self._grad_lagr_x_fn(x_k, m_k)
                 B_k = self._hess_lagr_xx_fn(B_prev, g_k, g_prev, x_k, x_prev)
@@ -127,31 +129,34 @@ class ConstrainedNewton(ConstrainedSolver):
             else:
                 B_k = self._hess_lagr_xx_fn()
 
+            constr_grad_x = self._eval_constraint_gradients(x_k)
+
             # ensure B_k is pd
             B_k_is_pd = None
-            if (self._direction != Direction.STEEPEST_DESCENT
-                    and self._direction != Direction.BFGS
+            if (self._direction == Direction.EXACT_NEWTON
                     and self._reg != HessianRegularization.NONE):
-                # TODO verify that Cholesky check is faster
-                B_k_is_pd = self._is_pd_matrix(B_k)
-                if not B_k_is_pd:
+                B_k_is_pd = True
+                Z_k = self._null_space(jnp.transpose(constr_grad_x))
+                reduced_B_k = jnp.transpose(Z_k) @ B_k @ Z_k
+
+                eig_vals, eig_vecs = jnp.linalg.eigh(reduced_B_k)
+                delta = 1e-6
+                min_eig = jnp.min(eig_vals)
+
+                if min_eig < delta:
+                    B_k_is_pd = False
                     if self._reg == HessianRegularization.EIGEN_DELTA:
-                        delta = 1e-5
-                        eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
                         eig_vals_modified = eig_vals.at[eig_vals < delta].set(delta)
-                        B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
                     elif self._reg == HessianRegularization.EIGEN_FLIP:
-                        delta = 1e-5
-                        eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
                         eig_vals_modified = jnp.array([self._flip_eig(e, delta) for e in eig_vals])
-                        B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
                     else:
                         # TODO modified Cholesky
                         raise NotImplementedError
 
+                    B_k += Z_k @ eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs) @ jnp.transpose(Z_k)
+
             # build KKT matrix, r'(x, lambda)
             kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(B_k)
-            constr_grad_x = self._eval_constraint_gradients(x_k)
             kkt_matrix = kkt_matrix.at[:self._x_dims, self._x_dims:].set(constr_grad_x)
             kkt_matrix = kkt_matrix.at[self._x_dims:, :self._x_dims].set(jnp.transpose(constr_grad_x))
 
@@ -185,7 +190,7 @@ class ConstrainedNewton(ConstrainedSolver):
             m_k = (1 - alpha_k) * m_k + alpha_k * d_k[self._x_dims:]
 
             # TODO check update sigma
-            self._sigma = jnp.max(jnp.abs(m_k)) + 0.1
+            self._sigma = jnp.max(jnp.abs(m_k)) * 1.5 + 10.
 
             # check convergence
             converged, conv_penalty = self._convergence_fn(x_k, m_k)

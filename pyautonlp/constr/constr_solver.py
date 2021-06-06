@@ -62,6 +62,16 @@ class ConstrainedSolver(Solver):
     #     # should return size Nx1 vector
     #     return self._grad_loss_x_fn(x) + self._eval_constraint_gradients(x) @ multipliers
 
+    def _null_space(self, A: jnp.ndarray):
+        # mimics numpy null_space
+        u, s, vh = jnp.linalg.svd(A, full_matrices=True)
+        M, N = u.shape[0], vh.shape[1]
+        rcond = jnp.finfo(s.dtype).eps * max(M, N)
+        tol = jnp.amax(s) * rcond
+        num = jnp.sum(s > tol, dtype=int)
+        Q = vh[num:, :].T.conj()
+        return Q
+
     def _get_convergence_fn(
             self,
             criteria: str,
@@ -123,6 +133,10 @@ class ConstrainedSolver(Solver):
             armijo_adj = self._calc_armijo_adj(x_k, alpha, grad_loss_x, direction_x, armijo, merit)
 
             n_iter += 1
+
+        if n_iter == max_iter:
+            alpha = .001
+            self._logger.warning(f'fBacktracking failed to find alpha, using default value {alpha}.')
 
         return alpha
 
