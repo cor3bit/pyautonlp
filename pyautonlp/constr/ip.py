@@ -2,9 +2,9 @@ import logging
 from typing import List, Tuple, Callable, Optional, Union
 
 import jax.numpy as jnp
-from jax import grad, hessian, jacfwd, jacrev, jit
+from jax import grad
 
-from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, HessianRegularization, KKTForm
+from pyautonlp.constants import *
 from pyautonlp.constr.constr_solver import ConstrainedSolver, CacheItem
 
 
@@ -30,7 +30,7 @@ class IP(ConstrainedSolver):
             **kwargs
     ):
         # logger
-        self._logger = logging.getLogger('sqp_solver')
+        self._logger = logging.getLogger('ip_solver')
         self._logger.setLevel(logging.INFO if verbose else logging.WARNING)
         self._logger.info(f'Initializing solver.')
 
@@ -58,20 +58,23 @@ class IP(ConstrainedSolver):
         self._logger.info(f'Dimensions of the equality multiplier vector: {self._eq_mult_dims}.')
 
         self._ineq_mult_dims = len(self._ineq_constr)
-        self._logger.info(f'Dimensions of the equality multiplier vector: {self._ineq_mult_dims}.')
+        self._logger.info(f'Dimensions of the inequality multiplier vector: {self._ineq_mult_dims}.')
         self._multiplier_dims = self._eq_mult_dims + self._ineq_mult_dims
 
         self._initial_eq_mult = jnp.zeros(shape=(self._eq_mult_dims,), dtype=jnp.float32)
         self._initial_ineq_mult = jnp.ones(shape=(self._ineq_mult_dims,), dtype=jnp.float32)
         self._initial_slack = jnp.ones(shape=(self._ineq_mult_dims,), dtype=jnp.float32)
 
-        # convergence
+        # convergence.
         self._convergence_fn = self._get_convergence_fn(conv_criteria)
         self._max_iter = max_iter
         self._tol = conv_tol
 
         # learning rate
-        self._step_size_fn = self._get_step_size_fn(line_search)
+        if line_search != LineSearch.BT_MERIT_ARMIJO:
+            raise ValueError(f'{line_search} not supported for IP Solver.')
+
+        self._step_size_fn = self._backtrack_ip
         self._alpha = alpha
         self._beta = beta
         self._gamma = gamma
@@ -134,7 +137,7 @@ class IP(ConstrainedSolver):
         while (not converged) and (k < self._max_iter):
             # calculate B_k
             if self._direction == Direction.EXACT_NEWTON:
-                B_k = self._hess_lagr_xx_fn(x_k, eq_m_k, ineq_m_k, s_k, tau)
+                B_k = self._hess_lagr_xx_fn(x_k, eq_m_k, ineq_m_k, s_k)
             elif self._direction == Direction.BFGS:
                 g_k = self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k)
                 B_k = self._hess_lagr_xx_fn(B_prev, g_k, g_prev, x_k, x_prev)
@@ -145,26 +148,8 @@ class IP(ConstrainedSolver):
                 B_k = self._hess_lagr_xx_fn()
 
             # ensure B_k is pd
-            B_k_is_pd = None
-            if (self._direction != Direction.STEEPEST_DESCENT
-                    and self._direction != Direction.BFGS
-                    and self._reg != HessianRegularization.NONE):
-                # TODO verify that Cholesky check is faster
-                B_k_is_pd = self._is_pd_matrix(B_k)
-                if not B_k_is_pd:
-                    if self._reg == HessianRegularization.EIGEN_DELTA:
-                        delta = 1e-5
-                        eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
-                        eig_vals_modified = eig_vals.at[eig_vals < delta].set(delta)
-                        B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
-                    elif self._reg == HessianRegularization.EIGEN_FLIP:
-                        delta = 1e-5
-                        eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
-                        eig_vals_modified = jnp.array([self._flip_eig(e, delta) for e in eig_vals])
-                        B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
-                    else:
-                        # TODO modified Cholesky
-                        raise NotImplementedError
+            eq_constr_grad_x = self._eval_eq_constraint_gradients(x_k)
+            B_k, B_k_is_pd = self._regularize_hessian(B_k, eq_constr_grad_x)
 
             # build KKT matrix, r'(x, lambda, mu, s)
             # insert B_k
@@ -187,7 +172,7 @@ class IP(ConstrainedSolver):
             kkt_matrix = kkt_matrix.at[n_x + n_g + n_h:, n_x + n_g + n_h:].set(M_k)
 
             # build KKT vector, r(x, lambda)
-            grad_lagr_x = self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k, s_k, tau)
+            grad_lagr_x = self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k, s_k)
             c_k = self._eval_constraints_with_slack(x_k, s_k)
             slack_component = M_k @ s_k - tau
             kkt_state = jnp.concatenate((grad_lagr_x, c_k, slack_component))
@@ -196,8 +181,14 @@ class IP(ConstrainedSolver):
             # Note: state is multiplied by (-1)
             d_k = jnp.linalg.solve(kkt_matrix, -kkt_state)
 
+            # calculate starting alpha
+            initial_alpha = self._limit_initial_alpha(ineq_m_k, s_k, d_k)
+
+            # TODO step cache
+            # self._logger.info(f'Initial alpha is {initial_alpha}.')
+
             # calculate step size (line search)
-            alpha_k = None # self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k)
+            alpha_k = self._step_size_fn(x_k, d_k, initial_alpha, s_k, tau)
 
             # update params for BFGS
             if self._direction == Direction.BFGS:
@@ -208,18 +199,32 @@ class IP(ConstrainedSolver):
             # save cache + logs
             loss = self._loss_fn(x_k)
             x_dir_norm = jnp.max(jnp.abs(d_k[:self._x_dims]))
-            cache_item = CacheItem(x_k, m_k, loss, alpha_k, x_dir_norm, B_k_is_pd, conv_penalty, self._sigma)
+            cache_item = CacheItem(x_k, eq_m_k, loss, alpha_k, x_dir_norm, B_k_is_pd, conv_penalty, self._sigma)
             self._cache[k] = cache_item
             self._logger.info(self._get_log_str(k, cache_item))
 
             # update variables
+            # TODO check
             x_k += alpha_k * d_k[:self._x_dims]
-            m_k = (1 - alpha_k) * m_k + alpha_k * d_k[self._x_dims:]
+            eq_m_k += alpha_k * d_k[self._x_dims:self._x_dims + self._eq_mult_dims]
+            ineq_m_k += alpha_k * d_k[self._x_dims + self._eq_mult_dims:-self._ineq_mult_dims]
+            s_k += alpha_k * d_k[-self._ineq_mult_dims:]
+
+            assert jnp.all(ineq_m_k > 0)
+            assert jnp.all(s_k > 0)
 
             # TODO check update sigma
-            self._sigma = jnp.max(jnp.abs(m_k)) + 0.1
+            m_k = jnp.concatenate((eq_m_k, ineq_m_k))
+            self._sigma = jnp.maximum(1., jnp.max(jnp.abs(m_k) * 1.5))
 
-            # TODO update tau
+            # TODO update tau, optimize!
+            grad_lagr_x = self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k, s_k)
+            c_k = self._eval_constraints_with_slack(x_k, s_k)
+            slack_component = M_k @ s_k - tau
+            kkt_state = jnp.concatenate((grad_lagr_x, c_k, slack_component))
+            kkt_state_inf_norm = jnp.max(jnp.abs(kkt_state))
+            if kkt_state_inf_norm <= tau:
+                tau *= 0.1
 
             # check convergence
             converged, conv_penalty = self._ip_convergence_fn(x_k, eq_m_k, ineq_m_k, s_k, tau)
@@ -229,7 +234,7 @@ class IP(ConstrainedSolver):
 
         # log and print last results
         loss = self._loss_fn(x_k)
-        cache_item = CacheItem(x_k, m_k, loss, .0, .0, None, conv_penalty, self._sigma)
+        cache_item = CacheItem(x_k, eq_m_k, loss, .0, .0, None, conv_penalty, self._sigma)
         self._cache[k] = cache_item
         self._logger.info(self._get_log_str(k, cache_item))
 
@@ -238,18 +243,94 @@ class IP(ConstrainedSolver):
 
         return x_k, info
 
-    def _ip_lagrangian(self, x, eq_mult, ineq_mult, slack, tau):
+    def _ip_lagrangian(self, x, eq_mult, ineq_mult, slack):
         loss_x = self._loss_fn(x)
-        barrier = -tau * jnp.sum(jnp.log(slack))
+        # barrier = -tau * jnp.sum(jnp.log(slack))
         eq_penalty = jnp.sum(jnp.array([c_fn(x) for c_fn in self._eq_constr]) * eq_mult)
         ineq_penalty = jnp.sum((jnp.array([c_fn(x) for c_fn in self._ineq_constr]) + slack) * ineq_mult)
-        return loss_x + barrier + eq_penalty + ineq_penalty
+        return loss_x + eq_penalty + ineq_penalty
 
     def _ip_convergence_fn(self, x_k, eq_m_k, ineq_m_k, s_k, tau):
         max_c_eq = jnp.max(jnp.abs(self._eval_eq_constraints(x_k)))
         max_c_ineq = jnp.max(jnp.clip(self._eval_ineq_constraints(x_k), a_min=0))
-        max_lagr_grad = jnp.max(jnp.abs(self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k, s_k, tau)))
+        max_lagr_grad = jnp.max(jnp.abs(self._grad_lagr_x_fn(x_k, eq_m_k, ineq_m_k, s_k)))
 
         max_viol = jnp.max(jnp.array([max_c_eq, max_c_ineq, max_lagr_grad, tau]))
 
         return max_viol <= self._tol, max_viol
+
+    def _limit_initial_alpha(self, ineq_m_k, s_k, d_k):
+        eps = 0.01
+        alpha = 1.
+
+        direction_ineq_m_k = d_k[self._x_dims + self._eq_mult_dims:-self._ineq_mult_dims]
+        direction_s_k = d_k[-self._ineq_mult_dims:]
+
+        # limit not reached
+        if (jnp.all(s_k + alpha * direction_s_k >= eps * s_k) and
+                jnp.all(ineq_m_k + alpha * direction_ineq_m_k >= eps * ineq_m_k)):
+            return alpha
+
+        # find max alpha that satisfy (0,1] and s_k + alpha * direction_s_k >= eps * s_k
+        d = jnp.concatenate((direction_ineq_m_k, direction_s_k))
+        b = jnp.concatenate((ineq_m_k, s_k))
+
+        neg_ind = jnp.where(d < 0)
+        d = d[neg_ind]
+        b = b[neg_ind]
+
+        a = (eps - 1.) * b / d
+
+        alpha = jnp.min(a)
+
+        assert 0 < alpha <= 1
+
+        return alpha
+
+    def _backtrack_ip(
+            self,
+            x_k,
+            direction,
+            initial_alpha,
+            s_k,
+            tau,
+            max_iter=30,
+            **kwargs
+    ):
+        alpha = initial_alpha
+        direction_x = direction[:self._x_dims]
+        direction_s = direction[-self._ineq_mult_dims:]
+
+        curr_loss = self._merit_fn_ip(x_k, s_k, tau)
+        next_loss = self._merit_fn_ip(x_k + alpha * direction_x, s_k + alpha * direction_s, tau)
+        armijo_adj = self._calc_armijo_adj_ip(x_k, s_k, alpha, direction_x, direction_s, tau)
+
+        n_iter = 0
+        while (next_loss > curr_loss + armijo_adj) and (n_iter < max_iter):
+            alpha *= self._beta
+
+            # update all alpha dependent
+            next_loss = self._merit_fn_ip(x_k + alpha * direction_x, s_k + alpha * direction_s, tau)
+            armijo_adj = self._calc_armijo_adj_ip(x_k, s_k, alpha, direction_x, direction_s, tau)
+
+            n_iter += 1
+
+        if n_iter == max_iter:
+            self._logger.warning(f'Backtracking failed to find alpha after {max_iter} iterations!')
+
+        return alpha
+
+    def _merit_adj_ip(self, x, s):
+        eq_norm = jnp.linalg.norm(self._eval_eq_constraints(x), ord=1)
+        ineq_norm = jnp.linalg.norm(self._eval_ineq_constraints(x) + s, ord=1)
+        return self._sigma * (eq_norm + ineq_norm)
+
+    def _merit_fn_ip(self, x, s, tau):
+        ip_adj = -tau * jnp.sum(jnp.log(s))
+        return self._loss_fn(x) + self._merit_adj_ip(x, s) + ip_adj
+
+    def _calc_armijo_adj_ip(self, x, s, alpha, direction_x, direction_s, tau):
+        direct_deriv_x = jnp.dot(self._grad_loss_x_fn(x), direction_x)
+        # ip_adj = -tau * jnp.sum(jnp.log(s))
+        ip_adj = -tau * jnp.sum(direction_s / s)
+        return self._gamma * alpha * (direct_deriv_x - self._merit_adj_ip(x, s) + ip_adj)
