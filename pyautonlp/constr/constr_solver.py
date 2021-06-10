@@ -1,4 +1,3 @@
-from functools import partial
 from typing import Tuple, Callable
 from collections import namedtuple
 
@@ -22,6 +21,8 @@ class ConstrainedSolver(Solver):
     _gamma = None
     _sigma = None
     _tol = None
+    _armijo = False
+    _merit = False
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
         raise NotImplementedError
@@ -49,6 +50,15 @@ class ConstrainedSolver(Solver):
         ineq_part = jnp.array([c_fn(x) + s for s, c_fn in zip(slack, self._ineq_constr)], dtype=jnp.float32)
         return jnp.concatenate((eq_part, ineq_part))
 
+    def _eval_eq_constraint_gradients(self, x):
+        # should return size NxM_g matrix
+        eq_constr_grads = jnp.empty((self._x_dims, self._eq_mult_dims), dtype=jnp.float32)
+
+        for j, c_grad_fn in enumerate(self._grad_constr_x_fns[:self._eq_mult_dims]):
+            eq_constr_grads = eq_constr_grads.at[:, j].set(c_grad_fn(x))
+
+        return eq_constr_grads
+
     def _eval_constraint_gradients(self, x):
         # should return size NxM matrix
         constraint_grads = jnp.empty((self._x_dims, self._multiplier_dims), dtype=jnp.float32)
@@ -61,16 +71,6 @@ class ConstrainedSolver(Solver):
     # def _grad_lagr_x_fn(self, x, multipliers):
     #     # should return size Nx1 vector
     #     return self._grad_loss_x_fn(x) + self._eval_constraint_gradients(x) @ multipliers
-
-    def _null_space(self, A: jnp.ndarray):
-        # mimics numpy null_space
-        u, s, vh = jnp.linalg.svd(A, full_matrices=True)
-        M, N = u.shape[0], vh.shape[1]
-        rcond = jnp.finfo(s.dtype).eps * max(M, N)
-        tol = jnp.amax(s) * rcond
-        num = jnp.sum(s > tol, dtype=int)
-        Q = vh[num:, :].T.conj()
-        return Q
 
     def _get_convergence_fn(
             self,
@@ -100,29 +100,42 @@ class ConstrainedSolver(Solver):
         if strategy == LineSearch.CONST:
             return self._constant_alpha
         elif strategy == LineSearch.BT:
-            return partial(self._backtrack)
+            return self._backtrack
         elif strategy == LineSearch.BT_ARMIJO:
-            return partial(self._backtrack, armijo=True)
+            self._armijo = True
+            return self._backtrack
         elif strategy == LineSearch.BT_MERIT:
-            return partial(self._backtrack, merit=True)
+            self._merit = True
+            return self._backtrack
         elif strategy == LineSearch.BT_MERIT_ARMIJO:
-            return partial(self._backtrack, armijo=True, merit=True)
+            self._merit = True
+            self._armijo = True
+            return self._backtrack
         else:
             raise ValueError(f'Unrecognized line search method: {strategy}.')
 
-    def _constant_alpha(self, **kwargs):
+    def _constant_alpha(
+            self,
+            **kwargs
+    ):
         return self._alpha
 
-    def _backtrack(self, x_k, grad_loss_x, direction, armijo=False, merit=False, max_iter=10):
-        alpha = 1.
-
+    def _backtrack(
+            self,
+            x_k,
+            direction,
+            grad_loss_x=None,
+            initial_alpha=1.,
+            max_iter=30,
+            **kwargs
+    ):
+        alpha = initial_alpha
         direction_x = direction[:self._x_dims]
-
-        loss_eval_fn = self._merit_fn if merit else self._loss_fn
+        loss_eval_fn = self._merit_fn if self._merit else self._loss_fn
 
         curr_loss = loss_eval_fn(x_k)
         next_loss = loss_eval_fn(x_k + alpha * direction_x)
-        armijo_adj = self._calc_armijo_adj(x_k, alpha, grad_loss_x, direction_x, armijo, merit)
+        armijo_adj = self._calc_armijo_adj(x_k, alpha, direction_x, grad_loss_x)
 
         n_iter = 0
         while (next_loss >= curr_loss + armijo_adj) and (n_iter < max_iter):
@@ -130,13 +143,12 @@ class ConstrainedSolver(Solver):
 
             # update all alpha dependent
             next_loss = loss_eval_fn(x_k + alpha * direction_x)
-            armijo_adj = self._calc_armijo_adj(x_k, alpha, grad_loss_x, direction_x, armijo, merit)
+            armijo_adj = self._calc_armijo_adj(x_k, alpha, direction_x, grad_loss_x)
 
             n_iter += 1
 
         if n_iter == max_iter:
-            alpha = .001
-            self._logger.warning(f'fBacktracking failed to find alpha, using default value {alpha}.')
+            self._logger.warning(f'Backtracking failed to find alpha after {max_iter} iterations!')
 
         return alpha
 
@@ -151,12 +163,12 @@ class ConstrainedSolver(Solver):
     def _merit_fn(self, x):
         return self._loss_fn(x) + self._merit_adj(x)
 
-    def _calc_armijo_adj(self, x, alpha, grad_loss_x, direction_x, armijo, merit):
-        if not armijo:
+    def _calc_armijo_adj(self, x, alpha, direction_x, grad_loss_x):
+        if not self._armijo:
             return 0.
 
         direct_deriv = jnp.dot(grad_loss_x, direction_x)
-        if not merit:
+        if not self._merit:
             return self._gamma * alpha * direct_deriv
 
         return self._gamma * alpha * (direct_deriv - self._merit_adj(x))

@@ -4,7 +4,7 @@ from typing import List, Tuple, Callable, Union
 import jax.numpy as jnp
 from jax import grad
 
-from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, HessianRegularization
+from pyautonlp.constants import *
 from pyautonlp.constr.constr_solver import ConstrainedSolver, CacheItem
 
 
@@ -132,28 +132,7 @@ class ConstrainedNewton(ConstrainedSolver):
             constr_grad_x = self._eval_constraint_gradients(x_k)
 
             # ensure B_k is pd
-            B_k_is_pd = None
-            if (self._direction == Direction.EXACT_NEWTON
-                    and self._reg != HessianRegularization.NONE):
-                B_k_is_pd = True
-                Z_k = self._null_space(jnp.transpose(constr_grad_x))
-                reduced_B_k = jnp.transpose(Z_k) @ B_k @ Z_k
-
-                eig_vals, eig_vecs = jnp.linalg.eigh(reduced_B_k)
-                delta = 1e-6
-                min_eig = jnp.min(eig_vals)
-
-                if min_eig < delta:
-                    B_k_is_pd = False
-                    if self._reg == HessianRegularization.EIGEN_DELTA:
-                        eig_vals_modified = eig_vals.at[eig_vals < delta].set(delta)
-                    elif self._reg == HessianRegularization.EIGEN_FLIP:
-                        eig_vals_modified = jnp.array([self._flip_eig(e, delta) for e in eig_vals])
-                    else:
-                        # TODO modified Cholesky
-                        raise NotImplementedError
-
-                    B_k += Z_k @ eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs) @ jnp.transpose(Z_k)
+            B_k, B_k_is_pd = self._regularize_hessian(B_k, constr_grad_x)
 
             # build KKT matrix, r'(x, lambda)
             kkt_matrix = kkt_matrix.at[:self._x_dims, :self._x_dims].set(B_k)
@@ -190,7 +169,7 @@ class ConstrainedNewton(ConstrainedSolver):
             m_k = (1 - alpha_k) * m_k + alpha_k * d_k[self._x_dims:]
 
             # TODO check update sigma
-            self._sigma = jnp.max(jnp.abs(m_k)) * 1.5 + 10.
+            self._sigma = jnp.maximum(1., jnp.max(jnp.abs(m_k)) * 1.5)
 
             # check convergence
             converged, conv_penalty = self._convergence_fn(x_k, m_k)

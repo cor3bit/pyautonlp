@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from jax import grad
 from quadprog import solve_qp
 
-from pyautonlp.constants import Direction, ConvergenceCriteria, LineSearch, HessianRegularization
+from pyautonlp.constants import *
 from pyautonlp.constr.constr_solver import ConstrainedSolver, CacheItem
 
 
@@ -125,26 +125,7 @@ class SQP(ConstrainedSolver):
                 B_k = self._hess_lagr_xx_fn()
 
             # ensure B_k is pd
-            B_k_is_pd = None
-            if (self._direction != Direction.STEEPEST_DESCENT
-                    and self._direction != Direction.BFGS
-                    and self._reg != HessianRegularization.NONE):
-                # TODO verify that Cholesky check is faster
-                B_k_is_pd = self._is_pd_matrix(B_k)
-                if not B_k_is_pd:
-                    if self._reg == HessianRegularization.EIGEN_DELTA:
-                        delta = 1e-5
-                        eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
-                        eig_vals_modified = eig_vals.at[eig_vals < delta].set(delta)
-                        B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
-                    elif self._reg == HessianRegularization.EIGEN_FLIP:
-                        delta = 1e-5
-                        eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
-                        eig_vals_modified = jnp.array([self._flip_eig(e, delta) for e in eig_vals])
-                        B_k = eig_vecs @ jnp.diag(eig_vals_modified) @ jnp.transpose(eig_vecs)
-                    else:
-                        # TODO modified Cholesky
-                        raise NotImplementedError
+            B_k, B_k_is_pd = self._regularize_hessian(B_k, constr_grad_x)
 
             # find direction by solving QP
             grad_loss_x = self._grad_loss_x_fn(x_k)
