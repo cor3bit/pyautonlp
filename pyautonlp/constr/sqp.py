@@ -57,7 +57,13 @@ class SQP(ConstrainedSolver):
             self._constr_fns.extend(ineq_constr)
         assert self._constr_fns
 
-        self._multiplier_dims = len(self._constr_fns)
+        self._eq_mult_dims = len(self._eq_constr)
+        self._logger.info(f'Dimensions of the equality multiplier vector: {self._eq_mult_dims}.')
+
+        self._ineq_mult_dims = len(self._ineq_constr)
+        self._logger.info(f'Dimensions of the inequality multiplier vector: {self._ineq_mult_dims}.')
+        self._multiplier_dims = self._eq_mult_dims + self._ineq_mult_dims
+
         self._initial_multipliers = jnp.zeros(shape=(self._multiplier_dims,), dtype=jnp.float32)
         self._n_eq = 0 if eq_constr is None else len(eq_constr)
         self._logger.info(f'Dimensions of the multiplier vector: {self._multiplier_dims}.')
@@ -80,16 +86,15 @@ class SQP(ConstrainedSolver):
         # grad & hessian functions
         # compile with JAX in advance
         self._grad_loss_x_fn = grad(self._loss_fn)  # N-by-1
+        self._grad_lagr_x_fn = grad(self._lagrangian)
         self._grad_constr_x_fns = [grad(f) for f in self._constr_fns]
 
         self._direction = direction
         if direction == Direction.EXACT_NEWTON:
             self._hess_lagr_xx_fn = self._hessian_exact(fn=self._lagrangian)  # N-by-N
         elif direction == Direction.BFGS:
-            self._grad_lagr_x_fn = grad(self._lagrangian)
             self._hess_lagr_xx_fn = self._hessian_bfgs_approx  # N-by-N
         elif direction == Direction.GAUSS_NEWTON:
-            self._grad_lagr_x_fn = grad(self._lagrangian)
             self._hess_lagr_xx_fn = self._hessian_gn_approx  # N-by-N
         elif direction == Direction.STEEPEST_DESCENT:
             self._hess_lagr_xx_fn = self._hessian_sd_approx  # N-by-N
@@ -125,7 +130,8 @@ class SQP(ConstrainedSolver):
                 B_k = self._hess_lagr_xx_fn()
 
             # ensure B_k is pd
-            B_k, B_k_is_pd = self._regularize_hessian(B_k, constr_grad_x)
+            eq_constr_grad_x = self._eval_eq_constraint_gradients(x_k)
+            B_k, B_k_is_pd = self._regularize_hessian(B_k, eq_constr_grad_x)
 
             # find direction by solving QP
             grad_loss_x = self._grad_loss_x_fn(x_k)
