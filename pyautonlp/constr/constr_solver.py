@@ -6,8 +6,6 @@ import jax.numpy as jnp
 from pyautonlp.constants import ConvergenceCriteria, LineSearch
 from pyautonlp.solver import Solver
 
-CacheItem = namedtuple('CacheItem', 'x m loss alpha x_dir H_pd penalty sigma')
-
 
 class ConstrainedSolver(Solver):
     _eq_constr = None

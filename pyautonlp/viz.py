@@ -83,7 +83,7 @@ class Visualizer:
         if self._solver_caches:
             if not self._separate:
                 for cache, name in zip(self._solver_caches, self._cache_names):
-                    path = np.array([np.array(item.x) for item in cache.values()])
+                    path = np.array([np.array(item['x']) for item in cache.values()])
                     plt.plot(path[:, 0], path[:, 1], marker='o', label=name, color='red')
             else:
                 raise NotImplementedError
@@ -96,7 +96,7 @@ class Visualizer:
         if self._solver_caches:
             for cache, name in zip(self._solver_caches, self._cache_names):
                 times = np.fromiter(cache.keys(), dtype=float)
-                losses = np.array([item.loss for item in cache.values()])
+                losses = np.array([item['loss'] for item in cache.values()])
                 sns.lineplot(x=times, y=losses, label=name).set_title('Loss(t)')
 
         # ax.set_title('Convergence')
@@ -107,7 +107,7 @@ class Visualizer:
         if self._solver_caches:
             for cache, name in zip(self._solver_caches, self._cache_names):
                 times = np.fromiter(cache.keys(), dtype=float)
-                penalties = np.array([item.penalty for item in cache.values()])
+                penalties = np.array([item['penalty'] for item in cache.values()])
                 sns.lineplot(x=times, y=penalties, label=name).set_title('KKT Penalty(t)')
 
         # ax.set_title('Convergence')
@@ -118,7 +118,7 @@ class Visualizer:
         if self._solver_caches:
             for cache, name in zip(self._solver_caches, self._cache_names):
                 times = np.fromiter(cache.keys(), dtype=float)
-                alphas = np.array([item.alpha for item in cache.values()])
+                alphas = np.array([item['alpha'] for item in cache.values()])
                 sns.lineplot(x=times[:-1], y=alphas[:-1], label=name).set_title('Alpha(t)')
 
         plt.legend()
@@ -128,9 +128,6 @@ class Visualizer:
 # --------------- runner ---------------
 
 if __name__ == '__main__':
-    from pyautonlp.constr.constr_newton import CacheItem
-
-
     def loss(x, y):
         # min z = 0.5 * x_T * x + 1_T * x
         return 0.5 * x * x + 0.5 * y * y + x + y
@@ -142,18 +139,18 @@ if __name__ == '__main__':
 
     fake_caches = [
         {
-            0: CacheItem(x=[-1, -1], m=[2.], loss=1., alpha=0.1, penalty=3., sigma=1.),
-            1: CacheItem(x=[-0.5, -0.5], m=[2.], loss=0.5, alpha=0.1, penalty=3., sigma=1.),
-            2: CacheItem(x=[-0.3, -0.3], m=[2.], loss=0.4, alpha=0.05, penalty=2., sigma=1.),
-            3: CacheItem(x=[1, -0.3], m=[2.], loss=0., alpha=0.03, penalty=2., sigma=1.),
-            4: CacheItem(x=[0.7, 0.7], m=[2.], loss=0., alpha=0.01, penalty=1., sigma=1.),
+            0: dict(x=[-1, -1], m=[2.], loss=1., alpha=0.1, penalty=3., sigma=1.),
+            1: dict(x=[-0.5, -0.5], m=[2.], loss=0.5, alpha=0.1, penalty=3., sigma=1.),
+            2: dict(x=[-0.3, -0.3], m=[2.], loss=0.4, alpha=0.05, penalty=2., sigma=1.),
+            3: dict(x=[1, -0.3], m=[2.], loss=0., alpha=0.03, penalty=2., sigma=1.),
+            4: dict(x=[0.7, 0.7], m=[2.], loss=0., alpha=0.01, penalty=1., sigma=1.),
         },
         {
-            0: CacheItem(x=[1, 1], m=[2.], loss=1., alpha=0.1, penalty=3., sigma=1.),
-            1: CacheItem(x=[0.5, 0.5], m=[2.], loss=0.5, alpha=0.1, penalty=3., sigma=1.),
-            2: CacheItem(x=[0.3, 0.3], m=[2.], loss=0.4, alpha=0.05, penalty=2., sigma=1.),
-            3: CacheItem(x=[0.2, 0.2], m=[2.], loss=0., alpha=0.03, penalty=2., sigma=1.),
-            4: CacheItem(x=[0.1, 0.1], m=[2.], loss=0., alpha=0.01, penalty=1., sigma=1.),
+            0: dict(x=[1, 1], m=[2.], loss=1., alpha=0.1, penalty=3., sigma=1.),
+            1: dict(x=[0.5, 0.5], m=[2.], loss=0.5, alpha=0.1, penalty=3., sigma=1.),
+            2: dict(x=[0.3, 0.3], m=[2.], loss=0.4, alpha=0.05, penalty=2., sigma=1.),
+            3: dict(x=[0.2, 0.2], m=[2.], loss=0., alpha=0.03, penalty=2., sigma=1.),
+            4: dict(x=[0.1, 0.1], m=[2.], loss=0., alpha=0.01, penalty=1., sigma=1.),
         },
     ]
 

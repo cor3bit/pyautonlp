@@ -11,7 +11,8 @@ class Solver(ABC):
     _logger = None
     _loss_fn = None
     _x_dims = None
-    _cache = None  # info collected during the run
+    _step_cache = None  # info collected during the step
+    _cache = None  # full info collected during the run
 
     @abstractmethod
     def solve(
@@ -19,15 +20,14 @@ class Solver(ABC):
     ) -> Tuple[jnp.ndarray, Tuple]:
         raise NotImplementedError
 
-    @staticmethod
-    def _get_log_str(k, cache_item):
-        is_pd = '-' if cache_item.H_pd is None else str(cache_item.H_pd)
-
-        return f'Iteration {k}: Loss: {cache_item.loss:.3f}; ' \
-               f'Alpha: {cache_item.alpha:.6f}; ' \
-               f'H is pd: {is_pd}; ' \
-               f'Sigma: {cache_item.sigma:.2f}; ' \
-               f'KKT Penalty: {cache_item.penalty:.5f}.'
+    def _log_step(self):
+        assert self._step_cache is not None
+        assert 'k' in self._step_cache
+        iter_i = self._step_cache['k']
+        dict_str = ','.join([f' {key}: {v:.6f}' for key, v in self._step_cache.items()
+                             if key not in ('k', 'x')])
+        msg = f'Iteration {iter_i}:' + dict_str
+        self._logger.info(msg)
 
     @staticmethod
     def _is_pd_matrix(a: jnp.ndarray) -> bool:
@@ -82,7 +82,7 @@ class Solver(ABC):
             reduced_B_k = Z_k.T @ B_k @ Z_k
 
             # check for symmetric
-            reduced_B_k = (reduced_B_k + reduced_B_k.T)/2.
+            reduced_B_k = (reduced_B_k + reduced_B_k.T) / 2.
 
             eig_vals, eig_vecs = jnp.linalg.eigh(reduced_B_k)
             delta = 1e-6
@@ -99,10 +99,10 @@ class Solver(ABC):
                     raise NotImplementedError
 
                 # TODO diag, just modified not -orig
-                B_k += Z_k @ eig_vecs @ jnp.diag(eig_vals_modified-eig_vals) @ eig_vecs.T @ Z_k.T
+                B_k += Z_k @ eig_vecs @ jnp.diag(eig_vals_modified - eig_vals) @ eig_vecs.T @ Z_k.T
 
                 # check for symmetric
-                B_k = (B_k + B_k.T)/2.
+                B_k = (B_k + B_k.T) / 2.
 
         return B_k, B_k_is_pd
 

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from jax import grad
 
 from pyautonlp.constants import *
-from pyautonlp.constr.constr_solver import ConstrainedSolver, CacheItem
+from pyautonlp.constr.constr_solver import ConstrainedSolver
 
 
 class IP(ConstrainedSolver):
@@ -81,6 +81,7 @@ class IP(ConstrainedSolver):
         self._sigma = sigma
 
         # save intermediate step info
+        self._step_cache = {}
         self._cache = {}
 
         # grad for loss & constraints
@@ -184,9 +185,6 @@ class IP(ConstrainedSolver):
             # calculate starting alpha
             initial_alpha = self._limit_initial_alpha(ineq_m_k, s_k, d_k)
 
-            # TODO step cache
-            # self._logger.info(f'Initial alpha is {initial_alpha}.')
-
             # calculate step size (line search)
             alpha_k = self._step_size_fn(x_k, d_k, initial_alpha, s_k, tau)
 
@@ -198,10 +196,14 @@ class IP(ConstrainedSolver):
 
             # save cache + logs
             loss = self._loss_fn(x_k)
-            x_dir_norm = jnp.max(jnp.abs(d_k[:self._x_dims]))
-            cache_item = CacheItem(x_k, eq_m_k, loss, alpha_k, x_dir_norm, B_k_is_pd, conv_penalty, self._sigma)
-            self._cache[k] = cache_item
-            self._logger.info(self._get_log_str(k, cache_item))
+            # x_dir_norm = jnp.max(jnp.abs(d_k[:self._x_dims]))
+            self._step_cache.update({
+                'k': k, 'B_k_is_pd': B_k_is_pd, 'initial_alpha': initial_alpha,
+                'alpha': alpha_k, 'sigma': self._sigma,
+                'loss': loss, 'penalty': conv_penalty, 'x': x_k,
+            })
+            self._cache[k] = dict(self._step_cache)
+            self._log_step()
 
             # update variables
             # TODO check
@@ -232,11 +234,17 @@ class IP(ConstrainedSolver):
             # increment counter
             k += 1
 
+            # clear step cache
+            self._step_cache.clear()
+
         # log and print last results
         loss = self._loss_fn(x_k)
-        cache_item = CacheItem(x_k, eq_m_k, loss, .0, .0, None, conv_penalty, self._sigma)
-        self._cache[k] = cache_item
-        self._logger.info(self._get_log_str(k, cache_item))
+        self._step_cache.update({
+            'k': k, 'sigma': self._sigma,
+            'loss': loss, 'penalty': conv_penalty, 'x': x_k,
+        })
+        self._cache[k] = dict(self._step_cache)
+        self._log_step()
 
         # fill additional info
         info = (converged, loss, k, self._cache)

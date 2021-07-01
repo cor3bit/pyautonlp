@@ -7,7 +7,7 @@ from jax import grad
 from quadprog import solve_qp
 
 from pyautonlp.constants import *
-from pyautonlp.constr.constr_solver import ConstrainedSolver, CacheItem
+from pyautonlp.constr.constr_solver import ConstrainedSolver
 
 
 class SQP(ConstrainedSolver):
@@ -82,6 +82,7 @@ class SQP(ConstrainedSolver):
 
         # save intermediate step info
         self._cache = {}
+        self._step_cache = {}
 
         # grad & hessian functions
         # compile with JAX in advance
@@ -150,10 +151,13 @@ class SQP(ConstrainedSolver):
 
             # save cache + logs
             loss = self._loss_fn(x_k)
-            x_dir_norm = jnp.max(jnp.abs(d_k[:self._x_dims]))
-            cache_item = CacheItem(x_k, m_k, loss, alpha_k, x_dir_norm, B_k_is_pd, conv_penalty, self._sigma)
-            self._cache[k] = cache_item
-            self._logger.info(self._get_log_str(k, cache_item))
+            self._step_cache.update({
+                'k': k, 'B_k_is_pd': B_k_is_pd,
+                'alpha': alpha_k, 'sigma': self._sigma,
+                'loss': loss, 'penalty': conv_penalty, 'x': x_k,
+            })
+            self._cache[k] = dict(self._step_cache)
+            self._log_step()
 
             # update state
             x_k += alpha_k * d_k[:self._x_dims]
@@ -170,9 +174,12 @@ class SQP(ConstrainedSolver):
 
         # log and print last results
         loss = self._loss_fn(x_k)
-        cache_item = CacheItem(x_k, m_k, loss, .0, .0, None, conv_penalty, self._sigma)
-        self._cache[k] = cache_item
-        self._logger.info(self._get_log_str(k, cache_item))
+        self._step_cache.update({
+            'k': k, 'sigma': self._sigma,
+            'loss': loss, 'penalty': conv_penalty, 'x': x_k,
+        })
+        self._cache[k] = dict(self._step_cache)
+        self._log_step()
 
         # fill additional info
         info = (converged, loss, k, self._cache)
