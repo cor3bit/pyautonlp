@@ -199,7 +199,7 @@ class IP(ConstrainedSolver):
             # x_dir_norm = jnp.max(jnp.abs(d_k[:self._x_dims]))
             self._step_cache.update({
                 'k': k, 'B_k_is_pd': B_k_is_pd, 'initial_alpha': initial_alpha,
-                'alpha': alpha_k, 'sigma': self._sigma,
+                'alpha': alpha_k, 'sigma': self._sigma, 'tau': tau,
                 'loss': loss, 'penalty': conv_penalty, 'x': x_k,
             })
             self._cache[k] = dict(self._step_cache)
@@ -240,7 +240,7 @@ class IP(ConstrainedSolver):
         # log and print last results
         loss = self._loss_fn(x_k)
         self._step_cache.update({
-            'k': k, 'sigma': self._sigma,
+            'k': k, 'sigma': self._sigma, 'tau': tau,
             'loss': loss, 'penalty': conv_penalty, 'x': x_k,
         })
         self._cache[k] = dict(self._step_cache)
