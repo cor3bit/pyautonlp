@@ -46,3 +46,9 @@ class KKTForm:
     FULL = 'Full'
     AUGMENTED = 'Augmented'
     NORMAL = 'Normal'
+
+class IntegrateMethod:
+    EEULER = 'Explicit Euler'
+    IEULER = 'Implicit Euler'
+    RK4 = 'RK4'
+    SSC_EEULER = 'Step-Size Control Explicit Euler'

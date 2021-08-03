@@ -1,7 +1,22 @@
 import jax.numpy as jnp
 
+from pyautonlp.constants import IntegrateMethod
 
-def eeuler(fn, x0, u0, time_grid, adaptive=False) -> jnp.ndarray:
+
+def integrate(fn, x0, u0, time_grid, method=IntegrateMethod.RK4):
+    if method == IntegrateMethod.EEULER:
+        return _eeuler(fn, x0, u0, time_grid)
+    elif method == IntegrateMethod.SSC_EEULER:
+        return _eeuler(fn, x0, u0, time_grid, adaptive=True)
+    elif method == IntegrateMethod.RK4:
+        return _erk4(fn, x0, u0, time_grid)
+    elif method == IntegrateMethod.IEULER:
+        return _ieuler(fn, x0, u0, time_grid)
+    else:
+        raise ValueError(f'Unrecognized integration method: {method}.')
+
+
+def _eeuler(fn, x0, u0, time_grid, adaptive=False) -> jnp.ndarray:
     res = [x0]
     x_i = x0
     for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
@@ -24,7 +39,7 @@ def eeuler(fn, x0, u0, time_grid, adaptive=False) -> jnp.ndarray:
     return jnp.stack(res)
 
 
-def erk4(fn, x0, u0, time_grid) -> jnp.ndarray:
+def _erk4(fn, x0, u0, time_grid) -> jnp.ndarray:
     res = [x0]
     x_i = x0
     for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
@@ -46,7 +61,7 @@ def erk4(fn, x0, u0, time_grid) -> jnp.ndarray:
     return jnp.stack(res)
 
 
-def ieuler(fn, x0, u0, time_grid) -> jnp.ndarray:
+def _ieuler(fn, x0, u0, time_grid) -> jnp.ndarray:
     res = [x0]
     x_i = x0
     for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
