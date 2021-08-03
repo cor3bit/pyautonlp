@@ -15,5 +15,6 @@ setuptools.setup(
     packages=setuptools.find_packages(exclude=['examples', 'tests']),
     install_requires=[
         'jax',
+        'quadprog',
     ],
 )

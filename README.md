@@ -5,7 +5,7 @@
 - Install the library with `pip`:
 
 ```
-$ pip install pip install git+https://github.com/cor3bit/pyautonlp.git
+$ pip install git+https://github.com/cor3bit/pyautonlp.git
 ```
 
 - Specify the problem using `jax.numpy` arrays:
