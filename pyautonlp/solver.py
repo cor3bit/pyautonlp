@@ -25,17 +25,23 @@ class Solver(ABC):
         assert 'k' in self._step_cache
         iter_i = self._step_cache['k']
         dict_str = ','.join([f' {key}: {v:.6f}' for key, v in self._step_cache.items()
-                             if key not in ('k', 'x')])
+                             if key not in ('k', 'x') and v is not None])
         msg = f'Iteration {iter_i}:' + dict_str
         self._logger.info(msg)
 
-    @staticmethod
-    def _is_pd_matrix(a: jnp.ndarray) -> bool:
+    # @staticmethod
+    def _is_pd_matrix(self, a: jnp.ndarray) -> bool:
         try:
-            L = jnp.linalg.cholesky(a)
-            if jnp.isnan(L).any():
+            # check that A is symmetric
+            if jnp.allclose(a, a.T, rtol=1e-5, atol=1e-8):
+                L = jnp.linalg.cholesky(a)
+                if jnp.isnan(L).any():
+                    return False
+                return True
+            else:
+                self._logger.warning(f'Hessian is not symmetric!')
                 return False
-            return True
+
         except Exception as e:
             return False
 
@@ -71,18 +77,18 @@ class Solver(ABC):
         return jnp.eye(N=self._x_dims)
 
     def _regularize_hessian(self, B_k, constr_grad_x):
-        B_k_is_pd = None
+        B_k_is_pd = True
 
-        if (self._direction == Direction.EXACT_NEWTON
-                and self._reg != HessianRegularization.NONE):
-            B_k_is_pd = True
+        if (self._direction == Direction.EXACT_NEWTON and self._reg != HessianRegularization.NONE):
+            # B_k_is_pd = self._is_pd_matrix(B_k)
+            # if not B_k_is_pd:
 
             Z_k = self._null_space(constr_grad_x.T)
 
             reduced_B_k = Z_k.T @ B_k @ Z_k
 
             # check for symmetric
-            reduced_B_k = (reduced_B_k + reduced_B_k.T) / 2.
+            # reduced_B_k = (reduced_B_k + reduced_B_k.T) / 2.
 
             eig_vals, eig_vecs = jnp.linalg.eigh(reduced_B_k)
             delta = 1e-6
@@ -99,10 +105,22 @@ class Solver(ABC):
                     raise NotImplementedError
 
                 # TODO diag, just modified not -orig
-                B_k += Z_k @ eig_vecs @ jnp.diag(eig_vals_modified - eig_vals) @ eig_vecs.T @ Z_k.T
+                diag_eig = jnp.diag(eig_vals_modified - eig_vals)
+                delta_B = Z_k @ eig_vecs @ diag_eig @ eig_vecs.T @ Z_k.T
+
+                # eig_vals3, eig_vecs3 = jnp.linalg.eigh(delta_B)
+
+                B_k += delta_B
 
                 # check for symmetric
-                B_k = (B_k + B_k.T) / 2.
+                # B_k = (B_k + B_k.T) / 2.
+
+                # Debug
+                # eig_vals2, eig_vecs2 = jnp.linalg.eigh(B_k)
+                # is_pd = self._is_pd_matrix(B_k)
+
+        # ensure symmetric
+        assert jnp.allclose(B_k, B_k.T, rtol=1e-5, atol=1e-8)
 
         return B_k, B_k_is_pd
 
