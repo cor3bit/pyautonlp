@@ -49,6 +49,6 @@ class KKTForm:
 
 class IntegrateMethod:
     EEULER = 'Explicit Euler'
+    RK4 = 'Explicit RK4'
+    SSC_EEULER = 'Adaptive Explicit Euler'
     IEULER = 'Implicit Euler'
-    RK4 = 'RK4'
-    SSC_EEULER = 'Step-Size Control Explicit Euler'

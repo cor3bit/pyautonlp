@@ -1,9 +1,9 @@
-from typing import Callable
+from typing import Callable, Tuple
 
-import matplotlib.pyplot as plt
 import jax.numpy as jnp
 
 from pyautonlp.constants import IntegrateMethod
+from pyautonlp.root.newton_root import NewtonRoot
 
 
 def integrate(
@@ -12,11 +12,12 @@ def integrate(
         u0: jnp.ndarray,
         time_grid: jnp.ndarray,
         method: str = IntegrateMethod.RK4,
+        **kwargs,
 ) -> jnp.ndarray:
     if method == IntegrateMethod.EEULER:
         return _eeuler(fn, x0, u0, time_grid)
     elif method == IntegrateMethod.SSC_EEULER:
-        return _eeuler_adaptive(fn, x0, u0, time_grid)
+        return _eeuler_adaptive(fn, x0, u0, time_grid, **kwargs)
     elif method == IntegrateMethod.RK4:
         return _erk4(fn, x0, u0, time_grid)
     elif method == IntegrateMethod.IEULER:
@@ -30,7 +31,9 @@ def _eeuler(
         x0: jnp.ndarray,
         u0: jnp.ndarray,
         time_grid: jnp.ndarray,
-) -> jnp.ndarray:
+) -> Tuple[jnp.ndarray, dict]:
+    info = {}
+
     res = [x0]
     x_i = x0
     for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
@@ -46,7 +49,7 @@ def _eeuler(
         # update vars
         x_i = x_j
 
-    return jnp.stack(res)
+    return jnp.stack(res), info
 
 
 def _eeuler_adaptive(
@@ -56,16 +59,18 @@ def _eeuler_adaptive(
         time_grid: jnp.ndarray,
         t_rel: float = 0.,
         t_abs: float = 1.,
-        plot_h: bool = False,
-) -> jnp.ndarray:
+) -> Tuple[jnp.ndarray, dict]:
+    info = {}
+
     res = [x0]
+
     x_i = x0
     t = time_grid[0]
     h = time_grid[1] - time_grid[0]
     tn = time_grid[-1]
     s_i = fn(x_i, u0, t)
 
-    h_series = [h]
+    ts = [t]
 
     while not jnp.isclose(t, tn):
         # correction for last time step
@@ -75,25 +80,23 @@ def _eeuler_adaptive(
         x_j = x_i + h * s_i
         s_j = fn(x_j, u0, t + h)
 
-        e = jnp.linalg.norm(s_j - s_i, ord=2) / 2
-        # TODO t_rel, t_abs
+        e = 0.5 * jnp.linalg.norm(s_j - s_i, ord=2) / t_abs
+        # TODO t_rel
 
         # make a step if error is small
         if e <= 1.:
             res.append(x_j)
+            ts.append(t + h)
             x_i = x_j
             s_i = s_j
             t += h
 
         # update interval h
         h *= jnp.minimum(2., jnp.maximum(.5, .9 / jnp.sqrt(e)))
-        h_series.append(h)
 
-    if plot_h:
-        plt.plot(h_series)
-        plt.show()
+    info['t'] = ts
 
-    return jnp.stack(res)
+    return jnp.stack(res), info
 
 
 def _erk4(
@@ -101,7 +104,9 @@ def _erk4(
         x0: jnp.ndarray,
         u0: jnp.ndarray,
         time_grid: jnp.ndarray,
-) -> jnp.ndarray:
+) -> Tuple[jnp.ndarray, dict]:
+    info = {}
+
     res = [x0]
     x_i = x0
     for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
@@ -120,7 +125,7 @@ def _erk4(
         # update vars
         x_i = x_j
 
-    return jnp.stack(res)
+    return jnp.stack(res), info
 
 
 def _ieuler(
@@ -128,7 +133,9 @@ def _ieuler(
         x0: jnp.ndarray,
         u0: jnp.ndarray,
         time_grid: jnp.ndarray,
-) -> jnp.ndarray:
+) -> Tuple[jnp.ndarray, dict]:
+    info = {}
+
     res = [x0]
     x_i = x0
     for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
@@ -138,10 +145,19 @@ def _ieuler(
         s_i = fn(x_i, u0, t_i)
 
         # new state
-        x_j = x_i + h * s_i
+        guess_x_j = x_i + h * s_i
+
+        solver = NewtonRoot(
+            lambda x: x_i + h * fn(x, u0, t_j) - x,
+            guess_x_j,
+            tol=1e-7,
+            verbose=False,
+        )
+        x_j = solver.solve()
+
         res.append(x_j)
 
         # update vars
         x_i = x_j
 
-    return jnp.stack(res)
+    return jnp.stack(res), info
