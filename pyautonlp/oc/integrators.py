@@ -1,6 +1,7 @@
 from typing import Callable, Tuple
 
 import jax.numpy as jnp
+from jax import jacfwd
 
 from pyautonlp.constants import IntegrateMethod
 from pyautonlp.root.newton_root import NewtonRoot
@@ -24,6 +25,71 @@ def integrate(
         return _ieuler(fn, x0, u0, time_grid)
     else:
         raise ValueError(f'Unrecognized integration method: {method}.')
+
+
+def integrate_with_ind(
+        fn: Callable,
+        x0: jnp.ndarray,
+        u0: jnp.ndarray,
+        time_grid: jnp.ndarray,
+        method: str = IntegrateMethod.RK4,
+        eps: float = 1e-6,
+        **kwargs,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    pass
+
+
+def integrate_with_end(
+        fn: Callable,
+        x0: jnp.ndarray,
+        u0: jnp.ndarray,
+        time_grid: jnp.ndarray,
+        method: str = IntegrateMethod.RK4,
+        eps: float = 1e-6,
+        **kwargs,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    # base
+    xs, info = integrate(fn, x0, u0, time_grid, method=method, **kwargs)
+    x = xs[-1]
+
+    # Calculate G_x
+    x_dims = x.shape[0]
+    G_x = []
+
+    for i in range(x_dims):
+        delta_i = jnp.zeros_like(x).at[i].set(eps)
+        x0_ = x0 + delta_i
+        xs_, _ = integrate(fn, x0_, u0, time_grid, method=method, **kwargs)
+        x_ = xs_[-1]
+        g_x_i = (x_ - x) / eps
+        G_x.append(g_x_i)
+
+    G_x = jnp.stack(G_x)
+
+    # TODO G_u
+    G_u = None
+
+    return x, G_x, G_u
+
+
+def integrate_with_ad(
+        fn: Callable,
+        x0: jnp.ndarray,
+        u0: jnp.ndarray,
+        time_grid: jnp.ndarray,
+        method: str = IntegrateMethod.RK4,
+        **kwargs,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    def _integrate_last(x0, u0, time_grid, method, fn, **kwargs):
+        xs, _ = integrate(fn, x0, u0, time_grid, method=method, **kwargs)
+        return xs[-1]
+
+    xs, _ = integrate(fn, x0, u0, time_grid, method=method, **kwargs)
+    x = [-1]
+    G_x = jacfwd(_integrate_last)(x0, u0, time_grid, method, fn, **kwargs)
+    G_u = None
+
+    return x, G_x, G_u
 
 
 def _eeuler(
