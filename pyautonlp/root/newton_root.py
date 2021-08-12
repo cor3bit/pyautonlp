@@ -47,7 +47,8 @@ class NewtonRoot:
             self._logger.info(f'Iteration {k}: Residual {jnp.max(r_k):.6f}.')
 
             jac_r_k = self._jac_residual_fn(x_curr)
-            x_next = x_curr - jnp.linalg.inv(jac_r_k) @ r_k
+            inc = jnp.linalg.solve(jac_r_k, r_k)
+            x_next = x_curr - inc
 
             # update variables
             x_curr = x_next
