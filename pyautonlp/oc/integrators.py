@@ -27,25 +27,13 @@ def integrate(
         raise ValueError(f'Unrecognized integration method: {method}.')
 
 
-def integrate_with_ind(
-        fn: Callable,
-        x0: jnp.ndarray,
-        u0: jnp.ndarray,
-        time_grid: jnp.ndarray,
-        method: str = IntegrateMethod.RK4,
-        eps: float = 1e-6,
-        **kwargs,
-) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    pass
-
-
 def integrate_with_end(
         fn: Callable,
         x0: jnp.ndarray,
         u0: jnp.ndarray,
         time_grid: jnp.ndarray,
         method: str = IntegrateMethod.RK4,
-        eps: float = 1e-6,
+        eps: float = 1e-5,
         **kwargs,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     # base
@@ -90,6 +78,98 @@ def integrate_with_ad(
     G_u = None
 
     return x, G_x, G_u
+
+
+def ad_eeuler(
+        fn: Callable,
+        x0: jnp.ndarray,
+        u0: jnp.ndarray,
+        time_grid: jnp.ndarray,
+        **kwargs,
+):
+    I = jnp.eye(2)
+    A = jnp.eye(2)
+
+    h = time_grid[1] - time_grid[0]
+
+    dfds = jnp.array([
+        [-16., 12.],
+        [12., -9.],
+    ], dtype=jnp.float64)
+
+    for i in range(len(time_grid) - 1):
+        delta_A = I + h * dfds
+        A = delta_A @ A
+
+    G_x = A.T
+
+    return G_x
+
+
+def ad_erk4(
+        fn: Callable,
+        x0: jnp.ndarray,
+        u0: jnp.ndarray,
+        time_grid: jnp.ndarray,
+        **kwargs,
+):
+    def rk_stage(dynamics, t, x, u, A):
+        dfds = jnp.array([
+            [-16., 12.],
+            [12., -9.],
+        ], dtype=jnp.float64)
+
+        k = dynamics(x, u, t)
+        k_a = dfds @ A
+        return k, k_a
+
+    s = x0
+    I = jnp.eye(2)
+    A = jnp.eye(2)
+
+    for i in range(len(time_grid) - 1):
+        t_k = time_grid[i]
+        t = time_grid[i + 1]
+        h = time_grid[i + 1] - time_grid[i]
+
+        k_1, k_a_1 = rk_stage(fn, t, s, u0, I)
+        k_2, k_a_2 = rk_stage(fn, t + h / 2, s + h / 2 * k_1, u0, I + h / 2 * k_a_1)
+        k_3, k_a_3 = rk_stage(fn, t + h / 2, s + h / 2 * k_2, u0, I + h / 2 * k_a_2)
+        k_4, k_a_4 = rk_stage(fn, t + h, s + h * k_3, u0, I + h * k_a_3)
+
+        s = s + h / 6 * (k_1 + 2 * k_2 + 2 * k_3 + k_4)
+        M = I + h / 6 * (k_a_1 + 2 * k_a_2 + 2 * k_a_3 + k_a_4)
+        A = M @ A
+
+    G_x = A.T
+
+    return G_x
+
+
+def ad_ieuler(
+        fn: Callable,
+        x0: jnp.ndarray,
+        u0: jnp.ndarray,
+        time_grid: jnp.ndarray,
+        **kwargs,
+):
+    I = jnp.eye(2)
+    A = jnp.eye(2)
+
+    h = time_grid[1] - time_grid[0]
+
+    dfds = jnp.array([
+        [-16., 12.],
+        [12., -9.],
+    ], dtype=jnp.float64)
+
+    for i in range(len(time_grid) - 1):
+        delta_A = I + h * dfds
+        A = delta_A @ A
+
+    G_x = A.T
+
+    return G_x
 
 
 def _eeuler(
@@ -137,6 +217,7 @@ def _eeuler_adaptive(
     s_i = fn(x_i, u0, t)
 
     ts = [t]
+    hs = []
 
     while not jnp.isclose(t, tn):
         # correction for last time step
@@ -153,6 +234,7 @@ def _eeuler_adaptive(
         if e <= 1.:
             res.append(x_j)
             ts.append(t + h)
+            hs.append(h)
             x_i = x_j
             s_i = s_j
             t += h
@@ -160,7 +242,8 @@ def _eeuler_adaptive(
         # update interval h
         h *= jnp.minimum(2., jnp.maximum(.5, .9 / jnp.sqrt(e)))
 
-    info['t'] = ts
+    info['ts'] = ts
+    info['hs'] = hs
 
     return jnp.stack(res), info
 
