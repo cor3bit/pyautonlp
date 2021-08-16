@@ -60,6 +60,43 @@ def integrate_with_end(
     return x, G_x, G_u
 
 
+def integrate_with_ind(
+        fn: Callable,
+        x0: jnp.ndarray,
+        u0: jnp.ndarray,
+        time_grid: jnp.ndarray,
+        method: str = IntegrateMethod.SSC_EEULER,
+        eps: float = 1e-5,
+        **kwargs,
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    if method != IntegrateMethod.SSC_EEULER:
+        raise ValueError(f'Method {method} supported for IND.')
+
+    # base
+    xs, info = integrate(fn, x0, u0, time_grid, method=method, **kwargs)
+    time_grid_base = info['ts']
+    x = xs[-1]
+
+    # Calculate G_x
+    x_dims = x.shape[0]
+    G_x = []
+
+    for i in range(x_dims):
+        delta_i = jnp.zeros_like(x).at[i].set(eps)
+        x0_ = x0 + delta_i
+        xs_, _ = integrate(fn, x0_, u0, time_grid_base, method=IntegrateMethod.EEULER, **kwargs)
+        x_ = xs_[-1]
+        g_x_i = (x_ - x) / eps
+        G_x.append(g_x_i)
+
+    G_x = jnp.stack(G_x)
+
+    # TODO G_u
+    G_u = None
+
+    return x, G_x, G_u
+
+
 def integrate_with_ad(
         fn: Callable,
         x0: jnp.ndarray,
@@ -73,7 +110,7 @@ def integrate_with_ad(
         return xs[-1]
 
     xs, _ = integrate(fn, x0, u0, time_grid, method=method, **kwargs)
-    x = [-1]
+    x = xs[-1]
     G_x = jacfwd(_integrate_last)(x0, u0, time_grid, method, fn, **kwargs)
     G_u = None
 
@@ -156,16 +193,46 @@ def ad_ieuler(
     I = jnp.eye(2)
     A = jnp.eye(2)
 
-    h = time_grid[1] - time_grid[0]
+    # h = time_grid[1] - time_grid[0]
 
     dfds = jnp.array([
         [-16., 12.],
         [12., -9.],
     ], dtype=jnp.float64)
 
-    for i in range(len(time_grid) - 1):
-        delta_A = I + h * dfds
+    G_x = None
+    G_u = None
+
+    res = [x0]
+    x_i = x0
+    for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
+        h = t_j - t_i
+
+        # x'(t)
+        s_i = fn(x_i, u0, t_i)
+
+        # new state
+        guess_x_j = x_i + h * s_i
+
+        solver = NewtonRoot(
+            lambda x: x_i + h * fn(x, u0, t_j) - x,
+            guess_x_j,
+            tol=1e-7,
+            verbose=False,
+            record_ad=True,
+        )
+        x_j, solver_info = solver.solve()
+
+        # AD sensitivity
+        jac_r_k = solver_info['ad']
+        drdk_inv = jnp.linalg.inv(jac_r_k)
+        delta_A = I - h * drdk_inv @ dfds
         A = delta_A @ A
+
+        res.append(x_j)
+
+        # update vars
+        x_i = x_j
 
     G_x = A.T
 
@@ -302,7 +369,7 @@ def _ieuler(
             tol=1e-7,
             verbose=False,
         )
-        x_j = solver.solve()
+        x_j, _ = solver.solve()
 
         res.append(x_j)
 

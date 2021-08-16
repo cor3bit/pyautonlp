@@ -1,5 +1,5 @@
 import logging
-from typing import Tuple, Callable, Union
+from typing import Tuple, Callable, Union, Dict
 
 import jax.numpy as jnp
 from jax import jacfwd
@@ -13,6 +13,7 @@ class NewtonRoot:
             max_iter: int = 100,
             tol: float = 1e-6,
             verbose: bool = False,
+            record_ad: bool = False,
     ):
         # logger
         self._logger = logging.getLogger('root_finder')
@@ -26,7 +27,7 @@ class NewtonRoot:
         # initial guess
         assert guess is not None
         self._x_dims = len(guess)
-        self._initial_x = jnp.array(guess, dtype=jnp.float32)
+        self._initial_x = jnp.array(guess)
         # self._initial_x = jnp.ones(self._x_dims, dtype=jnp.float32)
         self._logger.info(f'Dimensions of the state vector: {self._x_dims}.')
 
@@ -34,7 +35,13 @@ class NewtonRoot:
         self._max_iter = max_iter
         self._tol = tol
 
-    def solve(self) -> jnp.ndarray:
+        # AD sensitivity
+        self._ad = record_ad
+
+    def solve(self) -> Tuple[jnp.ndarray, Dict]:
+        info = {}
+
+
         x_curr = self._initial_x
         self._logger.info(f'Initial guess is: {x_curr}.')
 
@@ -42,9 +49,11 @@ class NewtonRoot:
 
         k = 0
 
-        while (not self._converged(r_k)) and (k < self._max_iter):
+        jac_r_k = None
+        converged = False
+        while (not converged) and (k < self._max_iter):
             # logging
-            self._logger.info(f'Iteration {k}: Residual {jnp.max(r_k):.6f}.')
+            # self._logger.info(f'Iteration {k}: Residual {np.max(r_k):.6f}.')
 
             jac_r_k = self._jac_residual_fn(x_curr)
             inc = jnp.linalg.solve(jac_r_k, r_k)
@@ -55,10 +64,17 @@ class NewtonRoot:
             r_k = self._residual_fn(x_curr)
             k += 1
 
-        # logging
-        self._logger.info(f'Iteration {k}: Residual {jnp.max(r_k):.6f}.')
+            # check convergence
+            converged = self._converged(r_k)
 
-        return x_curr
+        if self._ad:
+            assert jac_r_k is not None
+            info['ad'] = jac_r_k
+
+        # logging
+        # self._logger.info(f'Iteration {k}: Residual {np.max(r_k):.6f}.')
+
+        return x_curr, info
 
     def _converged(self, r_k: jnp.ndarray) -> bool:
         return jnp.allclose(r_k, jnp.zeros(self._x_dims), atol=self._tol)
