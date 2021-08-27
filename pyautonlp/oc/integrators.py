@@ -10,19 +10,22 @@ from pyautonlp.root.newton_root import NewtonRoot
 def integrate(
         fn: Callable,
         x0: jnp.ndarray,
-        u: jnp.ndarray,
+        u0: jnp.ndarray,
         time_grid: jnp.ndarray,
-        method: str = IntegrateMethod.RK4,
+        method: str = IntegrateMethod.EEULER,
+        with_grads: bool = False,
+        dfds_fn: Callable = None,
+        dfdu_fn: Callable = None,
         **kwargs,
 ) -> Tuple[jnp.ndarray, Dict]:
     if method == IntegrateMethod.EEULER:
-        return _eeuler(fn, x0, u, time_grid)
+        return _eeuler(fn, x0, u0, time_grid, with_grads, dfds_fn, dfdu_fn)
     elif method == IntegrateMethod.SSC_EEULER:
-        return _eeuler_adaptive(fn, x0, u, time_grid, **kwargs)
+        return _eeuler_adaptive(fn, x0, u0, time_grid, with_grads, dfds_fn, dfdu_fn, **kwargs)
     elif method == IntegrateMethod.RK4:
-        return _erk4(fn, x0, u, time_grid)
+        return _erk4(fn, x0, u0, time_grid, with_grads, dfds_fn, dfdu_fn)
     elif method == IntegrateMethod.IEULER:
-        return _ieuler(fn, x0, u, time_grid)
+        return _ieuler(fn, x0, u0, time_grid, with_grads, dfds_fn, dfdu_fn)
     else:
         raise ValueError(f'Unrecognized integration method: {method}.')
 
@@ -41,9 +44,8 @@ def integrate_with_end(
     x = xs[-1]
 
     # Calculate G_x
-    x_dims = x.shape[0]
     G_x = []
-
+    x_dims = x.shape[0]
     for i in range(x_dims):
         delta_i = jnp.zeros_like(x).at[i].set(eps)
         x0_ = x0 + delta_i
@@ -54,8 +56,18 @@ def integrate_with_end(
 
     G_x = jnp.stack(G_x).T
 
-    # TODO G_u
-    G_u = None
+    # Calculate G_u
+    G_u = []
+    u_dims = u0.shape[0]
+    for j in range(u_dims):
+        delta_j = jnp.zeros_like(u0).at[j].set(eps)
+        u0_ = u0 + delta_j
+        xs_, _ = integrate(fn, x0, u0_, time_grid, method=method, **kwargs)
+        x_ = xs_[-1]
+        g_u_j = (x_ - x) / eps
+        G_u.append(g_u_j)
+
+    G_u = jnp.stack(G_u).T
 
     return x, G_x, G_u
 
@@ -70,7 +82,7 @@ def integrate_with_ind(
         **kwargs,
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     if method != IntegrateMethod.SSC_EEULER:
-        raise ValueError(f'Method {method} supported for IND.')
+        raise ValueError(f'Method {method} not supported for IND.')
 
     # base
     xs, info = integrate(fn, x0, u0, time_grid, method=method, **kwargs)
@@ -78,9 +90,8 @@ def integrate_with_ind(
     x = xs[-1]
 
     # Calculate G_x
-    x_dims = x.shape[0]
     G_x = []
-
+    x_dims = x.shape[0]
     for i in range(x_dims):
         delta_i = jnp.zeros_like(x).at[i].set(eps)
         x0_ = x0 + delta_i
@@ -91,8 +102,18 @@ def integrate_with_ind(
 
     G_x = jnp.stack(G_x).T
 
-    # TODO G_u
-    G_u = None
+    # Calculate G_u
+    G_u = []
+    u_dims = u0.shape[0]
+    for j in range(u_dims):
+        delta_j = jnp.zeros_like(u0).at[j].set(eps)
+        u0_ = u0 + delta_j
+        xs_, _ = integrate(fn, x0, u0_, time_grid_base, method=IntegrateMethod.EEULER, **kwargs)
+        x_ = xs_[-1]
+        g_u_j = (x_ - x) / eps
+        G_u.append(g_u_j)
+
+    G_u = jnp.stack(G_u).T
 
     return x, G_x, G_u
 
@@ -111,8 +132,7 @@ def integrate_with_ad(
 
     xs, _ = integrate(fn, x0, u0, time_grid, method=method, **kwargs)
     x = xs[-1]
-    G_x = jacfwd(_integrate_last)(x0, u0, time_grid, method, fn, **kwargs)
-    G_u = None
+    G_x, G_u = jacfwd(_integrate_last, (0, 1))(x0, u0, time_grid, method, fn, **kwargs)
 
     return x, G_x, G_u
 
@@ -127,14 +147,13 @@ def ad_eeuler(
     I = jnp.eye(2)
     A = jnp.eye(2)
 
-    h = time_grid[1] - time_grid[0]
-
     dfds = jnp.array([
         [-16., 12.],
         [12., -9.],
     ], dtype=jnp.float64)
 
     for i in range(len(time_grid) - 1):
+        h = time_grid[i + 1] - time_grid[i]
         delta_A = I + h * dfds
         A = delta_A @ A
 
@@ -242,25 +261,39 @@ def ad_ieuler(
 def _eeuler(
         fn: Callable,
         x0: jnp.ndarray,
-        u: jnp.ndarray,
+        u0: jnp.ndarray,
         time_grid: jnp.ndarray,
+        with_grads: bool,
+        dfds_fn: Callable = None,
+        dfdu_fn: Callable = None,
 ) -> Tuple[jnp.ndarray, Dict]:
     info = {}
 
-    is_const_u = len(u.shape) == 1
-    if not is_const_u:
-        # Make sure u(t) exists for all times except for the last time step
-        assert len(time_grid) - 1 == u.shape[0]
+    # sensitivities
+    I, A, B = None, None, None
+    if with_grads:
+        assert dfds_fn is not None
+        assert dfdu_fn is not None
+        x_dims = x0.shape[0]
+        u_dims = u0.shape[0]
+        I = jnp.eye(x_dims)
+        A = jnp.eye(x_dims)
+        B = jnp.zeros((x_dims, u_dims))
 
     res = [x0]
     x_i = x0
-    for i, (t_i, t_j) in enumerate(zip(time_grid[0:-1], time_grid[1:])):
+    for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
         h = t_j - t_i
 
-        u_i = u if is_const_u else u[i]
+        # sensitivity
+        if with_grads:
+            # TODO check that indeed t_j, not t_i
+            inc = I + h * dfds_fn(x_i, u0, t_j)
+            A = inc @ A
+            B = inc @ B + h * dfdu_fn(x_i, u0, t_j)
 
         # dx/dt - slope
-        s_i = fn(x_i, u_i, t_i)
+        s_i = fn(x_i, u0, t_i)
 
         # new state
         x_j = x_i + h * s_i
@@ -269,33 +302,39 @@ def _eeuler(
         # update vars
         x_i = x_j
 
+    # info
+    if with_grads:
+        info['G_x'] = A.T
+        info['G_u'] = B.T
+
     return jnp.stack(res), info
 
 
 def _eeuler_adaptive(
         fn: Callable,
         x0: jnp.ndarray,
-        u: jnp.ndarray,
+        u0: jnp.ndarray,
         time_grid: jnp.ndarray,
-        t_rel: float = 0.,
+        with_grads: bool,
+        dfds_fn: Callable = None,
+        dfdu_fn: Callable = None,
         t_abs: float = 1.,
 ) -> Tuple[jnp.ndarray, Dict]:
     info = {}
 
     res = [x0]
 
-    is_const_u = len(u.shape) == 1
-    if not is_const_u:
-        raise ValueError(f'Non-constant u not supported for {IntegrateMethod.SSC_EEULER}.')
-
     x_i = x0
     t = time_grid[0]
     h = time_grid[1] - time_grid[0]
     tn = time_grid[-1]
-    s_i = fn(x_i, u, t)
+    s_i = fn(x_i, u0, t)
 
     ts = [t]
     hs = []
+
+    if with_grads:
+        raise NotImplementedError
 
     while not jnp.isclose(t, tn):
         # correction for last time step
@@ -303,10 +342,9 @@ def _eeuler_adaptive(
             h = tn - t
 
         x_j = x_i + h * s_i
-        s_j = fn(x_j, u, t + h)
+        s_j = fn(x_j, u0, t + h)
 
         e = 0.5 * jnp.linalg.norm(s_j - s_i, ord=2) / t_abs
-        # TODO t_rel
 
         # make a step if error is small
         if e <= 1.:
@@ -320,44 +358,85 @@ def _eeuler_adaptive(
         # update interval h
         h *= jnp.minimum(2., jnp.maximum(.5, .9 / jnp.sqrt(e)))
 
+    # info
     info['ts'] = ts
     info['hs'] = hs
 
     return jnp.stack(res), info
 
 
+def _rk_stage(dynamics, dfds_fn, dfdu_fn, x, u, t, A, B):
+    k = dynamics(x, u, t)
+    inc = dfds_fn(x, u, t)
+    k_a = inc @ A
+    k_b = inc @ B + dfdu_fn(x, u, t)
+    return k, k_a, k_b
+
+
 def _erk4(
         fn: Callable,
         x0: jnp.ndarray,
-        u: jnp.ndarray,
+        u0: jnp.ndarray,
         time_grid: jnp.ndarray,
+        with_grads: bool,
+        dfds_fn: Callable = None,
+        dfdu_fn: Callable = None,
 ) -> Tuple[jnp.ndarray, Dict]:
     info = {}
 
-    is_const_u = len(u.shape) == 1
-    if not is_const_u:
-        # Make sure u(t) exists for all times except for the last time step
-        assert len(time_grid) - 1 == u.shape[0]
+    # sensitivities
+    I, A, Z, B = None, None, None, None
+    if with_grads:
+        assert dfds_fn is not None
+        assert dfdu_fn is not None
+        x_dims = x0.shape[0]
+        u_dims = u0.shape[0]
+        I = jnp.eye(x_dims)
+        A = jnp.eye(x_dims)
+        Z = jnp.zeros((x_dims, u_dims))
+        B = jnp.zeros((x_dims, u_dims))
 
     res = [x0]
     x_i = x0
-    for i, (t_i, t_j) in enumerate(zip(time_grid[0:-1], time_grid[1:])):
+    for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
         h = t_j - t_i
 
-        u_i = u if is_const_u else u[i]
+        # sensitivity
+        if with_grads:
+            k1, k_a1, k_b1 = _rk_stage(fn, dfds_fn, dfdu_fn,
+                                       x_i, u0, t_i, I, Z)
+            k2, k_a2, k_b2 = _rk_stage(fn, dfds_fn, dfdu_fn,
+                                       x_i + h / 2 * k1, u0, t_i + h / 2, I + h / 2 * k_a1, h / 2 * k_b1)
+            k3, k_a3, k_b3 = _rk_stage(fn, dfds_fn, dfdu_fn,
+                                       x_i + h / 2 * k2, u0, t_i + h / 2, I + h / 2 * k_a2, h / 2 * k_b2)
+            k4, k_a4, k_b4 = _rk_stage(fn, dfds_fn, dfdu_fn,
+                                       x_i + h * k3, u0, t_i + h, I + h * k_a3, h * k_b3)
 
-        # kappas
-        k1 = fn(x_i, u_i, t_i)
-        k2 = fn(x_i + h * k1 / 2, u_i, t_i + h / 2)
-        k3 = fn(x_i + h * k2 / 2, u_i, t_i + h / 2)
-        k4 = fn(x_i + h * k3, u_i, t_i + h)
+            # new state
+            x_j = x_i + h * (k1 + 2 * k2 + 2 * k3 + k4) / 6
 
-        # new state
-        x_j = x_i + h * (k1 + 2 * k2 + 2 * k3 + k4) / 6
+            M = I + h / 6 * (k_a1 + 2 * k_a2 + 2 * k_a3 + k_a4)
+            A = M @ A
+            B = M @ B + h / 6 * (k_b1 + 2 * k_b2 + 2 * k_b3 + k_b4)
+        else:
+            # kappas
+            k1 = fn(x_i, u0, t_i)
+            k2 = fn(x_i + h * k1 / 2, u0, t_i + h / 2)
+            k3 = fn(x_i + h * k2 / 2, u0, t_i + h / 2)
+            k4 = fn(x_i + h * k3, u0, t_i + h)
+
+            # new state
+            x_j = x_i + h * (k1 + 2 * k2 + 2 * k3 + k4) / 6
+
         res.append(x_j)
 
         # update vars
         x_i = x_j
+
+    # info
+    if with_grads:
+        info['G_x'] = A
+        info['G_u'] = B
 
     return jnp.stack(res), info
 
@@ -365,40 +444,61 @@ def _erk4(
 def _ieuler(
         fn: Callable,
         x0: jnp.ndarray,
-        u: jnp.ndarray,
+        u0: jnp.ndarray,
         time_grid: jnp.ndarray,
+        with_grads: bool,
+        dfds_fn: Callable = None,
+        dfdu_fn: Callable = None,
 ) -> Tuple[jnp.ndarray, Dict]:
     info = {}
 
-    is_const_u = len(u.shape) == 1
-    if not is_const_u:
-        # Make sure u(t) exists for all times except for the last time step
-        assert len(time_grid) - 1 == u.shape[0]
+    # sensitivities
+    I, A, B = None, None, None
+    if with_grads:
+        assert dfds_fn is not None
+        assert dfdu_fn is not None
+        x_dims = x0.shape[0]
+        u_dims = u0.shape[0]
+        I = jnp.eye(x_dims)
+        A = jnp.eye(x_dims)
+        B = jnp.zeros((x_dims, u_dims))
 
     res = [x0]
     x_i = x0
-    for i, (t_i, t_j) in enumerate(zip(time_grid[0:-1], time_grid[1:])):
+    for t_i, t_j in zip(time_grid[0:-1], time_grid[1:]):
         h = t_j - t_i
 
-        u_i = u if is_const_u else u[i]
-
         # x'(t)
-        s_i = fn(x_i, u_i, t_i)
+        s_i = fn(x_i, u0, t_i)
 
         # new state
         guess_x_j = x_i + h * s_i
 
         solver = NewtonRoot(
-            lambda x: x_i + h * fn(x, u_i, t_j) - x,
+            lambda x: x_i + h * fn(x, u0, t_j) - x,
             guess_x_j,
             tol=1e-7,
             verbose=False,
+            record_ad=with_grads,
         )
-        x_j, _ = solver.solve()
+        x_j, solver_info = solver.solve()
+
+        if with_grads:
+            jac_r_k = solver_info['ad']
+            drdk_inv = jnp.linalg.inv(jac_r_k)
+            # TODO check that indeed t_j, not t_i
+            inc = I - h * drdk_inv @ dfds_fn(x_i, u0, t_j)
+            A = inc @ A
+            B = inc @ B - h * drdk_inv @ dfdu_fn(x_i, u0, t_j)
 
         res.append(x_j)
 
         # update vars
         x_i = x_j
+
+    # info
+    if with_grads:
+        info['G_x'] = A.T
+        info['G_u'] = B.T
 
     return jnp.stack(res), info
