@@ -8,10 +8,10 @@ from .som.newton import Newton
 from .constr.constr_newton import ConstrainedNewton
 from .constr.sqp import SQP
 from .constr.ip import IP
+from .oc.single_shooting import SingleShooting
 
 
 def solve(
-        loss_fn: Callable,
         solver_type: str,
         **kwargs,
 ) -> Tuple[jnp.ndarray, Tuple]:
@@ -19,23 +19,25 @@ def solve(
 
     # Redirect to a particular solver based on a solver_type string
     if solver_type == SolverType.GD:
-        solver = GD(loss_fn=loss_fn, **kwargs)
+        solver = GD(**kwargs)
     elif solver_type == SolverType.NEWTON:
         if 'eq_constr' in kwargs or 'ineq_constr' in kwargs:
-            solver = ConstrainedNewton(loss_fn=loss_fn, **kwargs)
+            solver = ConstrainedNewton(**kwargs)
         else:
-            solver = Newton(loss_fn=loss_fn, **kwargs)
+            solver = Newton(**kwargs)
     elif solver_type == SolverType.SQP:
-        solver = SQP(loss_fn=loss_fn, **kwargs)
+        solver = SQP(**kwargs)
     elif solver_type == SolverType.IP:
-        solver = IP(loss_fn=loss_fn, **kwargs)
+        solver = IP(**kwargs)
+    elif solver_type == SolverType.SINGLE_SHOOTING:
+        solver = SingleShooting(**kwargs)
+    elif solver_type == SolverType.MULT_SHOOTING:
+        raise NotImplementedError
     elif solver_type == SolverType.HJB:
         raise NotImplementedError
     elif solver_type == SolverType.PMP:
         raise NotImplementedError
     elif solver_type == SolverType.DP:
-        raise NotImplementedError
-    elif solver_type == SolverType.DOC:
         raise NotImplementedError
     else:
         raise ValueError(f'Unrecognized solver type: {solver_type}.')

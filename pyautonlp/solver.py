@@ -124,6 +124,54 @@ class Solver(ABC):
 
         return B_k, B_k_is_pd
 
+    def _regularize_full_hessian(self, B_k):
+        B_k_is_pd = True
+
+        if (self._direction == Direction.EXACT_NEWTON and self._reg != HessianRegularization.NONE):
+            # B_k_is_pd = self._is_pd_matrix(B_k)
+            # if not B_k_is_pd:
+
+            # Z_k = self._null_space(constr_grad_x.T)
+            #
+            # reduced_B_k = Z_k.T @ B_k @ Z_k
+
+            # check for symmetric
+            # reduced_B_k = (reduced_B_k + reduced_B_k.T) / 2.
+
+            eig_vals, eig_vecs = jnp.linalg.eigh(B_k)
+            delta = 1e-6
+            min_eig = jnp.min(eig_vals)
+
+            if min_eig < delta:
+                B_k_is_pd = False
+                if self._reg == HessianRegularization.EIGEN_DELTA:
+                    eig_vals_modified = eig_vals.at[eig_vals < delta].set(delta)
+                elif self._reg == HessianRegularization.EIGEN_FLIP:
+                    eig_vals_modified = jnp.array([self._flip_eig(e, delta) for e in eig_vals])
+                else:
+                    # TODO modified Cholesky
+                    raise NotImplementedError
+
+                # TODO diag, just modified not -orig
+                diag_eig = jnp.diag(eig_vals_modified)
+                # delta_B = eig_vecs @ diag_eig @ eig_vecs.T
+
+                # eig_vals3, eig_vecs3 = jnp.linalg.eigh(delta_B)
+
+                B_k = eig_vecs @ diag_eig @ eig_vecs.T
+
+                # check for symmetric
+                # B_k = (B_k + B_k.T) / 2.
+
+                # Debug
+                # eig_vals2, eig_vecs2 = jnp.linalg.eigh(B_k)
+                # is_pd = self._is_pd_matrix(B_k)
+
+        # ensure symmetric
+        # assert jnp.allclose(B_k, B_k.T, rtol=1e-5, atol=1e-8)
+
+        return B_k, B_k_is_pd
+
     @staticmethod
     def _null_space(a: jnp.ndarray, rcond=None):
         # mimics numpy null_space

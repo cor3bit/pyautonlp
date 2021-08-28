@@ -13,7 +13,8 @@ class SolverType:
     HJB = 'hjb'
     PMP = 'pmp'
     DP = 'dp'
-    DOC = 'doc'
+    SINGLE_SHOOTING = 'ss'
+    MULT_SHOOTING = 'ms'
 
 
 class Direction:
