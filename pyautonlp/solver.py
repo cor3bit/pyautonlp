@@ -29,6 +29,17 @@ class Solver(ABC):
         msg = f'Iteration {iter_i}:' + dict_str
         self._logger.info(msg)
 
+    def _log_param(self, k, name, value, save=True):
+        # save in cache
+        if save:
+            if k not in self._cache:
+                self._cache[k] = {}
+            self._cache[k][name] = value
+
+        # display message
+        msg = f' {name}: {value}'
+        self._logger.info(msg)
+
     # @staticmethod
     def _is_pd_matrix(self, a: jnp.ndarray) -> bool:
         try:
