@@ -13,7 +13,7 @@ import jax.numpy as jnp
 class Visualizer:
     def __init__(
             self,
-            loss_fn: Callable,
+            loss_fn: Callable = None,
             eq_constr: List[Callable] = None,
             ineq_constr: List[Callable] = None,
             solver_caches: List[Dict] = None,
@@ -123,6 +123,56 @@ class Visualizer:
 
         plt.legend()
         plt.show()
+
+    def plot_shooting(self):
+        assert self._solver_caches is not None
+        assert len(self._solver_caches) == 1
+        cache = self._solver_caches[0]
+
+        # 1) plot main time plot k vs. |g(x)|, |dLagrangian|, alpha
+        fig, ax = plt.subplots()
+        ax.set_yscale('log')
+
+        times = np.fromiter(cache.keys(), dtype=float)
+        vals = np.array([(step_cache['alpha'], step_cache['c_eq_violation'],
+                          step_cache['grad_Lagrangian'], step_cache['loss'],
+                          ) for step_cache in cache.values()])
+
+        ax.plot(times, vals[:, 1], '-', label=r'$\left\Vert g\right\Vert _{\infty}$')
+        ax.plot(times, vals[:, 2], '-', label=r'$\left\Vert \nabla_{x}\mathcal{L}\right\Vert _{\infty}$')
+        ax.plot(times, vals[:, 0], '-', label=r'$\alpha$')
+        ax.plot(times, vals[:, 3], '-', label=r'$Loss$')
+
+        plt.legend()
+        plt.xlabel('k')
+        plt.show()
+
+        # 2) plot w_k every N iterations
+        t0, tf = 0., 2.
+        u_min, u_max = -20., 20.
+        N = 10
+        for k, step_cache in cache.items():
+            if k % N == 0:
+                fig, ax = plt.subplots()
+
+                w_k = np.array(step_cache['w'])
+                w_k_dims = w_k.shape[0]
+
+                times = np.linspace(t0, tf, w_k_dims + 1)
+                w_k_steps = np.concatenate((w_k, [w_k[-1]]))
+
+                ax.plot(times, np.array([u_min for i in range(len(times))]), color='red', ls='--')
+                ax.plot(times, np.array([u_max for i in range(len(times))]), color='red', ls='--')
+                ax.step(times, w_k_steps, where='post')
+
+                plt.title(f'SQP iteration: {k}')
+                # plt.legend()
+                plt.xlabel('$t$')
+                plt.ylabel('$u$')
+                plt.show()
+
+        # 3) create gif of w_k evolution
+        # TODO
 
 
 # --------------- runner ---------------

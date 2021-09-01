@@ -10,6 +10,7 @@ from quadprog import solve_qp
 import qpsolvers
 
 from pyautonlp.constants import *
+from pyautonlp.viz import Visualizer
 from pyautonlp.constr.constr_solver import ConstrainedSolver
 from pyautonlp.oc.integrators import integrate, integrate_with_ad
 
@@ -188,7 +189,6 @@ class SingleShooting(ConstrainedSolver):
             try:
                 d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T)
                 # self._log_param(k, 'd', d_k[:self._w_dims])
-
             except Exception as e:
                 self._logger.warning('QP is infeasible! Trying a different solver.')
                 self._logger.warning(e)
@@ -199,17 +199,15 @@ class SingleShooting(ConstrainedSolver):
                 raise NotImplementedError
 
             # calculate step size (line search)
-            # TODO recheck backtracking
             alpha_k = self._shooting_backtrack(
-                w_k=w_k, d_k=d_k, loss=loss, grad_loss=grad_loss, x_i=x_i, max_iter=7)
+                w_k=w_k, d_k=d_k, loss=loss, grad_loss=grad_loss, x_i=x_i, max_iter=20)
             self._log_param(k, 'sigma', self._sigma)
             self._log_param(k, 'alpha', alpha_k)
 
             # update controls and multipliers
-            # TODO recheck for shooting
             w_k += alpha_k * d_k[:self._w_dims]
 
-            m_eq_ind_end = self._w_dims+self._eq_mult_dims
+            m_eq_ind_end = self._w_dims + self._eq_mult_dims
             m_eq_k = (1 - alpha_k) * m_eq_k + alpha_k * d_k[self._w_dims:m_eq_ind_end]
             m_ineq_k = (1 - alpha_k) * m_ineq_k + alpha_k * d_k[m_eq_ind_end:]
 
@@ -228,8 +226,8 @@ class SingleShooting(ConstrainedSolver):
 
         # charts
         if self._viz:
-            # TODO
-            pass
+            visualizer = Visualizer(solver_caches=[self._cache], x1_bounds=(self._u_min, self._u_max))
+            visualizer.plot_shooting()
 
         return w_k, info
 
@@ -314,7 +312,7 @@ class SingleShooting(ConstrainedSolver):
 
         # logging
         if with_grads:
-            self._log_param(k, 'x_N', x_i, save=with_grads)
+            self._log_param(k, 'x_N', x_i, save=False)
             self._log_param(k, 'loss', loss, save=with_grads)
             self._logger.info(f'Loss calculation finished in {perf_counter() - t1} sec.')
 
@@ -438,9 +436,9 @@ class SingleShooting(ConstrainedSolver):
         grad_lagr = grad_loss + m_eq_k @ grad_c_eq_k + m_ineq_k @ grad_c_ineq_k
         max_lagr_grad = jnp.max(jnp.abs(grad_lagr))
 
-        self._log_param(k, 'c_eq violation', max_c_eq, save=False)
-        self._log_param(k, 'c_ineq violation', max_c_ineq, save=False)
-        self._log_param(k, 'grad_Lagrangian', max_lagr_grad, save=False)
+        self._log_param(k, 'c_eq_violation', max_c_eq, save=True)
+        self._log_param(k, 'c_ineq_violation', max_c_ineq, save=True)
+        self._log_param(k, 'grad_Lagrangian', max_lagr_grad, save=True)
 
         max_viol = jnp.maximum(jnp.maximum(max_c_eq, max_c_ineq), max_lagr_grad)
 
