@@ -40,6 +40,7 @@ class SingleShooting(ConstrainedSolver):
             max_iter: int = 50,
 
             verbose: bool = False,
+            visualize: bool = False,
             **kwargs
     ):
         # logger
@@ -70,6 +71,8 @@ class SingleShooting(ConstrainedSolver):
 
         self._w_dims = self._n_steps * self._u_dims
         self._logger.info(f'Dimensions of the decision vector w: {self._w_dims}.')
+        self._w_u_max = jnp.full(shape=(self._w_dims,), fill_value=self._u_max, dtype=jnp.float32)
+        self._w_u_min = jnp.full(shape=(self._w_dims,), fill_value=self._u_min, dtype=jnp.float32)
 
         # residuals R(w)
         self._r_dims = self._n_steps * (self._x_dims + self._u_dims) + self._x_dims
@@ -96,6 +99,9 @@ class SingleShooting(ConstrainedSolver):
         # save intermediate step info
         self._cache = {}
 
+        # viz
+        self._viz = visualize
+
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
         if self._u_dims != 1:
             raise NotImplementedError
@@ -109,12 +115,6 @@ class SingleShooting(ConstrainedSolver):
         m_ineq_k = jnp.zeros((self._ineq_mult_dims,), dtype=jnp.float32)
 
         # constraints preprocessing
-        # grad_c_ineq_k = jnp.vstack(
-        #     [
-        #         jnp.diag(jnp.ones((self._w_dims,), jnp.float32)),
-        #         jnp.diag(-jnp.ones((self._w_dims,), jnp.float32)),
-        #     ]
-        # )
         grad_c_ineq_k = jnp.empty((self._ineq_mult_dims, self._w_dims), jnp.float32)
         grad_c_ineq_k = grad_c_ineq_k.at[::2, :].set(
             jnp.diag(jnp.ones((self._w_dims,), jnp.float32))
@@ -122,9 +122,6 @@ class SingleShooting(ConstrainedSolver):
         grad_c_ineq_k = grad_c_ineq_k.at[1::2, :].set(
             jnp.diag(-jnp.ones((self._w_dims,), jnp.float32))
         )
-
-        w_u_max = jnp.full(shape=(self._w_dims,), fill_value=self._u_max, dtype=jnp.float32)
-        w_u_min = jnp.full(shape=(self._w_dims,), fill_value=self._u_min, dtype=jnp.float32)
 
         # precompiles dynamics jacobians
         dfds_fn = jit(jacfwd(self._dynamics, argnums=0))
@@ -149,28 +146,21 @@ class SingleShooting(ConstrainedSolver):
             # logging
             self._logger.info(f'---------------- Iteration {k} ----------------')
             self._log_param(k, 'w', w_k)
-            self._log_param(k, 'm_eq', m_eq_k)
-            self._log_param(k, 'm_ineq', m_ineq_k)
+            # self._log_param(k, 'm_eq', m_eq_k)
+            # self._log_param(k, 'm_ineq', m_ineq_k)
 
             # give w_k, calculate evolution of x
             loss, x_i, grad_loss, B_k, Jac_R = self._shooting_loss_fn(
                 w_k, k, time_grid_shooting, dfds_fn, dfdu_fn, with_grads=True)
 
             # construct constraints matrixes
-            c_eq_k = x_i - self._xf
+            c_eq_k = self._eval_eq_constraints(x=w_k, x_i=x_i)
+            c_ineq_k = self._eval_ineq_constraints(x=w_k)
 
             # undo *sqrt(Q) for pure dx(n)/dw
             a = Jac_R[-self._x_dims:, :]
             b = jnp.repeat(sqrt_x_pen, self._w_dims).reshape((self._x_dims, self._w_dims))
             grad_c_eq_k = a / b
-
-            # c_ineq_k = jnp.concatenate([
-            #     w_k - w_u_max,
-            #     -w_k + w_u_min,
-            # ])
-            c_ineq_k = jnp.empty((2 * self._w_dims,), jnp.float32)
-            c_ineq_k = c_ineq_k.at[::2].set(w_k - w_u_max)
-            c_ineq_k = c_ineq_k.at[1::2].set(-w_k + w_u_min)
 
             converged, kkt_viol = self._shooting_converged(k, grad_loss, m_eq_k, m_ineq_k, c_eq_k,
                                                            c_ineq_k, grad_c_eq_k, grad_c_ineq_k)
@@ -197,28 +187,33 @@ class SingleShooting(ConstrainedSolver):
             # TODO relax if infeasible
             try:
                 d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T)
-                self._log_param(k, 'd', d_k[:self._w_dims])
+                # self._log_param(k, 'd', d_k[:self._w_dims])
 
             except Exception as e:
                 self._logger.warning('QP is infeasible! Trying a different solver.')
                 self._logger.warning(e)
                 # TODO return m_k
-                d_k = self._solve_infeasible_qp(B_k, grad_loss, c_eq_k, c_ineq_k, grad_c_eq_k, grad_c_ineq_k)
-                self._log_param(k, 'd2', d_k)
+                # d_k = self._solve_infeasible_qp(B_k, grad_loss, c_eq_k, c_ineq_k, grad_c_eq_k, grad_c_ineq_k)
+                # self._log_param(k, 'd2', d_k)
 
                 raise NotImplementedError
 
             # calculate step size (line search)
             # TODO recheck backtracking
-            alpha_k = self._shooting_backtrack(w_k=w_k, grad_loss=grad_loss, direction=d_k, max_iter=7)
+            alpha_k = self._shooting_backtrack(
+                w_k=w_k, d_k=d_k, loss=loss, grad_loss=grad_loss, x_i=x_i, max_iter=7)
             self._log_param(k, 'sigma', self._sigma)
             self._log_param(k, 'alpha', alpha_k)
 
             # update controls and multipliers
             # TODO recheck for shooting
-            w_k += alpha_k * d_k[:self._x_dims]
-            m_k = (1 - alpha_k) * m_k + alpha_k * d_k[self._x_dims:]
-            self._sigma = jnp.max(jnp.abs(m_k)) + 0.1
+            w_k += alpha_k * d_k[:self._w_dims]
+
+            m_eq_ind_end = self._w_dims+self._eq_mult_dims
+            m_eq_k = (1 - alpha_k) * m_eq_k + alpha_k * d_k[self._w_dims:m_eq_ind_end]
+            m_ineq_k = (1 - alpha_k) * m_ineq_k + alpha_k * d_k[m_eq_ind_end:]
+
+            self._sigma = jnp.max(jnp.abs(jnp.concatenate([m_eq_k, m_ineq_k]))) + 0.1
 
             # increment counter
             k += 1
@@ -231,11 +226,17 @@ class SingleShooting(ConstrainedSolver):
         # fill additional info
         info = (converged, k, self._cache)
 
+        # charts
+        if self._viz:
+            # TODO
+            pass
+
         return w_k, info
 
     def _shooting_loss_fn(self, w_k, k, time_grid_shooting, dfds_fn, dfdu_fn, with_grads=False):
         # logging
-        self._logger.info('Loss calculation started.')
+        if with_grads:
+            self._logger.info('Loss calculation started.')
 
         t1 = perf_counter()
 
@@ -312,11 +313,26 @@ class SingleShooting(ConstrainedSolver):
         B_k = Jac_R.T @ Jac_R if with_grads else None
 
         # logging
-        self._log_param(k, 'x_N', x_i, save=with_grads)
-        self._log_param(k, 'loss', loss, save=with_grads)
-        self._logger.info(f'Loss calculation finished in {perf_counter() - t1} sec.')
+        if with_grads:
+            self._log_param(k, 'x_N', x_i, save=with_grads)
+            self._log_param(k, 'loss', loss, save=with_grads)
+            self._logger.info(f'Loss calculation finished in {perf_counter() - t1} sec.')
 
-        return (loss, x_i, grad_loss, B_k, Jac_R) if with_grads else loss
+        return (loss, x_i, grad_loss, B_k, Jac_R) if with_grads else (loss, x_i)
+
+    def _eval_eq_constraints(self, x, **kwargs):
+        return kwargs['x_i'] - self._xf
+
+    def _eval_ineq_constraints(self, x, **kwargs):
+        c_ineq_k = jnp.empty((2 * self._w_dims,), jnp.float32)
+        c_ineq_k = c_ineq_k.at[::2].set(x - self._w_u_max)
+        c_ineq_k = c_ineq_k.at[1::2].set(-x + self._w_u_min)
+        return c_ineq_k
+
+    def _eval_constraints(self, x, **kwargs):
+        c_eq_k = self._eval_eq_constraints(x, **kwargs)
+        c_ineq_k = self._eval_ineq_constraints(x, **kwargs)
+        return jnp.concatenate([c_eq_k, c_ineq_k])
 
     def _solve_qp(self, B_k, grad_loss_x, c_k, constr_grad_x):
         # convert to numpy
@@ -354,6 +370,68 @@ class SingleShooting(ConstrainedSolver):
 
         return d_k
 
+    def _shooting_backtrack(
+            self,
+            w_k: jnp.ndarray,
+            d_k: jnp.ndarray,
+            loss: float,
+            grad_loss: jnp.ndarray,
+            x_i: jnp.ndarray,
+            initial_alpha: float = 1.,
+            max_iter: int = 30,
+            **kwargs
+    ):
+        self._logger.info('Backtracking started.')
+
+        alpha = initial_alpha
+
+        direction_w = d_k[:self._w_dims]
+
+        curr_loss = loss
+        curr_merit_adj = self._shooting_merit_adj(w_k, x_i)
+
+        next_w_k = w_k + alpha * direction_w
+        next_loss, next_x_i = self._loss_fn(next_w_k)
+        next_merit_adj = self._shooting_merit_adj(next_w_k, next_x_i)
+
+        armijo_adj = self._shooting_armijo_adj(w_k, alpha, direction_w, grad_loss, x_i)
+
+        n_iter = 0
+        while (next_loss + next_merit_adj >= curr_loss + curr_merit_adj + armijo_adj) and (n_iter < max_iter):
+            # update alpha
+            alpha *= self._beta
+
+            # update all alpha dependencies
+            armijo_adj *= self._beta
+
+            next_w_k = w_k + alpha * direction_w
+            next_loss, next_x_i = self._loss_fn(next_w_k)
+            next_merit_adj = self._shooting_merit_adj(next_w_k, next_x_i)
+
+            n_iter += 1
+
+        if n_iter == max_iter:
+            self._logger.warning(f'Backtracking failed to find alpha after {max_iter} iterations!')
+        else:
+            self._logger.info(f'Backtracking converged after {n_iter} iterations.')
+
+        return alpha
+
+    def _shooting_merit_adj(self, w_k, x_i):
+        c_eq_k = self._eval_eq_constraints(x=w_k, x_i=x_i)
+        eq_norm = jnp.linalg.norm(c_eq_k, ord=1)
+
+        ineq_norm = 0.
+        # TODO skips inequality adjustment
+        # c_ineq_k = self._eval_ineq_constraints(x=w_k)
+        # ineq_norm = jnp.linalg.norm(jnp.clip(c_ineq_k, a_min=0), ord=1)
+
+        return self._sigma * (eq_norm + ineq_norm)
+
+    def _shooting_armijo_adj(self, w_k, alpha, direction_w, grad_loss, x_i):
+        direct_deriv = jnp.dot(grad_loss, direction_w)
+        return self._gamma * alpha * (direct_deriv - self._shooting_merit_adj(w_k, x_i))
+
     def _shooting_converged(self, k, grad_loss, m_eq_k, m_ineq_k, c_eq_k, c_ineq_k, grad_c_eq_k, grad_c_ineq_k):
         max_c_eq = jnp.max(jnp.abs(c_eq_k))
         max_c_ineq = jnp.max(jnp.clip(c_ineq_k, a_min=0))
@@ -367,59 +445,3 @@ class SingleShooting(ConstrainedSolver):
         max_viol = jnp.maximum(jnp.maximum(max_c_eq, max_c_ineq), max_lagr_grad)
 
         return max_viol <= self._tol, max_viol
-
-    def _shooting_backtrack(
-            self,
-            w_k,
-            direction,
-            loss,
-            grad_loss=None,
-            initial_alpha=1.,
-            max_iter=30,
-            **kwargs
-    ):
-        alpha = initial_alpha
-        direction_w = direction[:self._w_dims]
-
-        curr_loss = loss
-        next_loss = self._shooting_merit_fn(w_k + alpha * direction_w)
-
-        armijo_adj = self._shooting_calc_armijo_adj(w_k, alpha, direction_w, grad_loss)
-
-        n_iter = 0
-        while (next_loss >= curr_loss + armijo_adj) and (n_iter < max_iter):
-            # update alpha
-            alpha *= self._beta
-
-            # update all alpha dependent
-            next_loss = self._shooting_merit_fn(w_k + alpha * direction_w)
-            armijo_adj = self._shooting_calc_armijo_adj(w_k, alpha, direction_w, grad_loss)
-
-            n_iter += 1
-
-        if n_iter == max_iter:
-            self._logger.warning(f'Backtracking failed to find alpha after {max_iter} iterations!')
-
-        return alpha
-
-    def _shooting_merit_adj(self, w_k):
-        # TODO
-        eq_norm = 0. if self._eq_constr is None else jnp.linalg.norm(self._eval_eq_constraints(x), ord=1)
-
-        ineq_norm = 0. if self._ineq_constr is None else jnp.linalg.norm(
-            jnp.clip(self._eval_ineq_constraints(x), a_min=0), ord=1)
-
-        return self._sigma * (eq_norm + ineq_norm)
-
-    def _shooting_merit_fn(self, x):
-        return self._loss_fn(x) + self._shooting_merit_adj(x)
-
-    def _shooting_calc_armijo_adj(self, w_k, alpha, direction_w, grad_loss):
-        if not self._armijo:
-            return 0.
-
-        direct_deriv = jnp.dot(grad_loss, direction_w)
-        if not self._merit:
-            return self._gamma * alpha * direct_deriv
-
-        return self._gamma * alpha * (direct_deriv - self._shooting_merit_adj(w_k))

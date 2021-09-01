@@ -28,19 +28,19 @@ class ConstrainedSolver(Solver):
     def _lagrangian(self, x, multipliers):
         return self._loss_fn(x) + jnp.sum(jnp.array([c_fn(x) for c_fn in self._constr_fns]) * multipliers)
 
-    def _eval_eq_constraints(self, x):
+    def _eval_eq_constraints(self, x, **kwargs):
         if self._eq_constr is None:
             return .0
 
         return jnp.array([c_fn(x) for c_fn in self._eq_constr], dtype=jnp.float32)
 
-    def _eval_ineq_constraints(self, x):
+    def _eval_ineq_constraints(self, x, **kwargs):
         if self._ineq_constr is None:
             return .0
 
         return jnp.array([c_fn(x) for c_fn in self._ineq_constr], dtype=jnp.float32)
 
-    def _eval_constraints(self, x):
+    def _eval_constraints(self, x, **kwargs):
         return jnp.array([c_fn(x) for c_fn in self._constr_fns], dtype=jnp.float32)
 
     def _eval_constraints_with_slack(self, x, slack):
