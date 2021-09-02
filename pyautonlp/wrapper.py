@@ -9,6 +9,7 @@ from .constr.constr_newton import ConstrainedNewton
 from .constr.sqp import SQP
 from .constr.ip import IP
 from .oc.single_shooting import SingleShooting
+from .oc.multiple_shooting import MultipleShooting
 
 
 def solve(
@@ -32,7 +33,7 @@ def solve(
     elif solver_type == SolverType.SINGLE_SHOOTING:
         solver = SingleShooting(**kwargs)
     elif solver_type == SolverType.MULT_SHOOTING:
-        raise NotImplementedError
+        solver = MultipleShooting(**kwargs)
     elif solver_type == SolverType.HJB:
         raise NotImplementedError
     elif solver_type == SolverType.PMP:
