@@ -18,6 +18,7 @@ class SQP(ConstrainedSolver):
             ineq_constr: List[Callable] = None,
             guess: Union[Tuple, jnp.ndarray] = None,
             direction: str = Direction.STEEPEST_DESCENT,
+            gn_hessian_fn: Optional[Callable] = None,
             reg: str = HessianRegularization.NONE,
             line_search: str = LineSearch.CONST,
             alpha: float = 0.01,  # relevant for Constant step line search
@@ -57,15 +58,14 @@ class SQP(ConstrainedSolver):
             self._constr_fns.extend(ineq_constr)
         assert self._constr_fns
 
-        self._eq_mult_dims = len(self._eq_constr)
+        self._eq_mult_dims = 0 if eq_constr is None else len(eq_constr)
         self._logger.info(f'Dimensions of the equality multiplier vector: {self._eq_mult_dims}.')
 
-        self._ineq_mult_dims = len(self._ineq_constr)
+        self._ineq_mult_dims = 0 if ineq_constr is None else len(ineq_constr)
         self._logger.info(f'Dimensions of the inequality multiplier vector: {self._ineq_mult_dims}.')
         self._multiplier_dims = self._eq_mult_dims + self._ineq_mult_dims
 
         self._initial_multipliers = jnp.zeros(shape=(self._multiplier_dims,), dtype=jnp.float32)
-        self._n_eq = 0 if eq_constr is None else len(eq_constr)
         self._logger.info(f'Dimensions of the multiplier vector: {self._multiplier_dims}.')
 
         # convergence
@@ -96,7 +96,8 @@ class SQP(ConstrainedSolver):
         elif direction == Direction.BFGS:
             self._hess_lagr_xx_fn = self._hessian_bfgs_approx  # N-by-N
         elif direction == Direction.GAUSS_NEWTON:
-            self._hess_lagr_xx_fn = self._hessian_gn_approx  # N-by-N
+            assert gn_hessian_fn is not None
+            self._hess_lagr_xx_fn = gn_hessian_fn
         elif direction == Direction.STEEPEST_DESCENT:
             self._hess_lagr_xx_fn = self._hessian_sd_approx  # N-by-N
         else:
@@ -125,14 +126,17 @@ class SQP(ConstrainedSolver):
                 g_k = self._grad_lagr_x_fn(x_k, m_k)
                 B_k = self._hess_lagr_xx_fn(B_prev, g_k, g_prev, x_k, x_prev)
             elif self._direction == Direction.GAUSS_NEWTON:
+                # TODO correct params
                 g_k = self._grad_lagr_x_fn(x_k, m_k)
                 B_k = self._hess_lagr_xx_fn(g_k)
             else:
                 B_k = self._hess_lagr_xx_fn()
 
             # ensure B_k is pd
-            eq_constr_grad_x = self._eval_eq_constraint_gradients(x_k)
-            B_k, B_k_is_pd = self._regularize_hessian(B_k, eq_constr_grad_x)
+            # B_k_is_pd = None
+            # eq_constr_grad_x = self._eval_eq_constraint_gradients(x_k)
+            # B_k, B_k_is_pd = self._regularize_hessian(B_k, eq_constr_grad_x)
+            B_k, B_k_is_pd = self._regularize_full_hessian(B_k)
 
             # find direction by solving QP
             grad_loss_x = self._grad_loss_x_fn(x_k)
@@ -141,7 +145,7 @@ class SQP(ConstrainedSolver):
             d_k = self._solve_qp(B_k, grad_loss_x, c_k, constr_grad_x)
 
             # calculate step size (line search)
-            alpha_k = self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k)
+            alpha_k = self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k, max_iter=7)
 
             # update params for BFGS
             if self._direction == Direction.BFGS:
@@ -163,6 +167,8 @@ class SQP(ConstrainedSolver):
             x_k += alpha_k * d_k[:self._x_dims]
             m_k = (1 - alpha_k) * m_k + alpha_k * d_k[self._x_dims:]
 
+            self._logger.info(f'Updated x_k: {x_k}.')
+
             # TODO check update sigma
             self._sigma = jnp.max(jnp.abs(m_k)) + 0.1
 
@@ -174,6 +180,7 @@ class SQP(ConstrainedSolver):
 
         # log and print last results
         loss = self._loss_fn(x_k)
+
         self._step_cache.update({
             'k': k, 'sigma': self._sigma,
             'loss': loss, 'penalty': conv_penalty, 'x': x_k,
@@ -195,7 +202,7 @@ class SQP(ConstrainedSolver):
         C = np.array(constr_grad_x, dtype=np.double)
 
         # solve QP
-        xf, f, xu, iters, lagr, iact = solve_qp(G, a, C, b, meq=self._n_eq)
+        xf, f, xu, iters, lagr, iact = solve_qp(G, a, C, b, meq=self._eq_mult_dims)
 
         # translate back to JAX
         d_k = jnp.array(np.concatenate((xf, lagr)))
