@@ -5,14 +5,12 @@ from functools import partial
 
 import numpy as np
 import jax.numpy as jnp
-from jax import grad, jacfwd, jit
-from quadprog import solve_qp
+from jax import jacfwd, jit
 import qpsolvers
 
 from pyautonlp.constants import *
 from pyautonlp.viz import Visualizer
 from pyautonlp.constr.constr_solver import ConstrainedSolver
-from pyautonlp.oc.single_shooting import SingleShooting
 from pyautonlp.oc.integrators import integrate, integrate_with_ad
 
 
@@ -163,6 +161,16 @@ class MultipleShooting(ConstrainedSolver):
             c_k = jnp.concatenate([c_eq_k, c_ineq_k])
             grad_c_k = jnp.vstack([grad_c_eq_k, grad_c_ineq_k])
 
+            # TODO REMOVE, DEBUG-ONLY
+            # np_B_k = np.array(B_k)
+            # np_grad_loss = np.array(grad_loss)
+            # np_c_eq_k = np.array(c_eq_k)
+            # np_grad_c_eq_k = np.array(grad_c_eq_k)
+            # np_c_ineq_k = np.array(c_ineq_k)
+            # np_grad_c_ineq_k = np.array(grad_c_ineq_k)
+            # np_c_k = np.array(c_k)
+            # np_grad_c_k = np.array(grad_c_k)
+
             # TODO relax if infeasible
             try:
                 d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T, self._eq_mult_dims)
@@ -176,8 +184,11 @@ class MultipleShooting(ConstrainedSolver):
 
                 raise NotImplementedError
 
+            self._log_param(k, 'max_d', jnp.max(d_k), save=False)
+            self._log_param(k, 'min_d', jnp.min(d_k), save=False)
+
             # calculate step size (line search)
-            alpha_k = self._ms_backtrack(w_k=w_k, d_k=d_k, loss=loss, grad_loss=grad_loss,
+            alpha_k = self._ms_backtrack(w_k=w_k, d_k=d_k, loss=loss, grad_loss=grad_loss, c_eq_k=c_eq_k,
                                          time_grid_shooting=time_grid_shooting, max_iter=10)
 
             self._log_param(k, 'sigma', self._sigma)
@@ -188,7 +199,7 @@ class MultipleShooting(ConstrainedSolver):
 
             m_eq_ind_end = self._w_dims + self._eq_mult_dims
             m_eq_k = (1 - alpha_k) * m_eq_k + alpha_k * d_k[self._w_dims:m_eq_ind_end]
-            m_ineq_k = (1 - alpha_k) * m_ineq_k + alpha_k * d_k[m_eq_ind_end:]
+            # m_ineq_k = (1 - alpha_k) * m_ineq_k + alpha_k * d_k[m_eq_ind_end:]
 
             self._sigma = jnp.max(jnp.abs(jnp.concatenate([m_eq_k, m_ineq_k]))) + 0.1
 
@@ -368,6 +379,7 @@ class MultipleShooting(ConstrainedSolver):
             d_k: jnp.ndarray,
             loss: float,
             grad_loss: jnp.ndarray,
+            c_eq_k: jnp.ndarray,
             time_grid_shooting: jnp.ndarray,
             initial_alpha: float = 1.,
             max_iter: int = 30,
@@ -380,13 +392,13 @@ class MultipleShooting(ConstrainedSolver):
         direction_w = d_k[:self._w_dims]
 
         curr_loss = loss
-        curr_merit_adj = self._ms_merit_adj(w_k, time_grid_shooting)
+        curr_merit_adj = self._ms_merit_adj(w_k, time_grid_shooting, c_eq_k)
 
         next_w_k = w_k + alpha * direction_w
         next_loss = self._loss_fn(next_w_k)
         next_merit_adj = self._ms_merit_adj(next_w_k, time_grid_shooting)
 
-        armijo_adj = self._ms_armijo_adj(w_k, alpha, direction_w, grad_loss, time_grid_shooting)
+        armijo_adj = self._ms_armijo_adj(w_k, alpha, direction_w, grad_loss, time_grid_shooting, c_eq_k)
 
         n_iter = 0
         while (next_loss + next_merit_adj >= curr_loss + curr_merit_adj + armijo_adj) and (n_iter < max_iter):
@@ -409,8 +421,10 @@ class MultipleShooting(ConstrainedSolver):
 
         return alpha
 
-    def _ms_merit_adj(self, w_k, time_grid_shooting):
-        c_eq_k = self._eval_eq_constraints(x=w_k, time_grid_shooting=time_grid_shooting)
+    def _ms_merit_adj(self, w_k, time_grid_shooting, c_eq_k=None):
+        if c_eq_k is None:
+            c_eq_k = self._eval_eq_constraints(x=w_k, time_grid_shooting=time_grid_shooting)
+
         eq_norm = jnp.linalg.norm(c_eq_k, ord=1)
 
         ineq_norm = 0.
@@ -420,9 +434,9 @@ class MultipleShooting(ConstrainedSolver):
 
         return self._sigma * (eq_norm + ineq_norm)
 
-    def _ms_armijo_adj(self, w_k, alpha, direction_w, grad_loss, time_grid_shooting):
+    def _ms_armijo_adj(self, w_k, alpha, direction_w, grad_loss, time_grid_shooting, c_eq_k):
         direct_deriv = jnp.dot(grad_loss, direction_w)
-        return self._gamma * alpha * (direct_deriv - self._ms_merit_adj(w_k, time_grid_shooting))
+        return self._gamma * alpha * (direct_deriv - self._ms_merit_adj(w_k, time_grid_shooting, c_eq_k))
 
     def _ms_converged(self, k, grad_loss, m_eq_k, c_eq_k, grad_c_eq_k):
         max_c_eq = jnp.max(jnp.abs(c_eq_k))
