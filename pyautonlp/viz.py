@@ -20,6 +20,7 @@ class Visualizer:
             cache_names: List[str] = None,
             x1_bounds: Tuple[float, float] = (-1, 1),
             x2_bounds: Tuple[float, float] = (-1, 1),
+            n: int = 20,
             with_alpha_plot: bool = False,
             with_loss_plot: bool = False,
             with_penalty_plot: bool = False,
@@ -36,6 +37,7 @@ class Visualizer:
         self._with_loss_plot = with_loss_plot
         self._with_penalty_plot = with_penalty_plot
         self._separate = separate
+        self._n = n
 
     def visualize(self):
         self.plot_convergence()
@@ -134,14 +136,15 @@ class Visualizer:
         ax.set_yscale('log')
 
         times = np.fromiter(cache.keys(), dtype=float)
-        vals = np.array([(step_cache['alpha'], step_cache['c_eq_violation'],
-                          step_cache['grad_Lagrangian'], step_cache['loss'],
-                          ) for step_cache in cache.values()])
+        vals = np.array([(
+            step_cache['alpha'], step_cache['c_eq_violation'],
+            step_cache['grad_Lagrangian'], step_cache['loss'],
+        ) for step_cache in cache.values()])
 
         ax.plot(times, vals[:, 1], '-', label=r'$\left\Vert g\right\Vert _{\infty}$')
         ax.plot(times, vals[:, 2], '-', label=r'$\left\Vert \nabla_{x}\mathcal{L}\right\Vert _{\infty}$')
         ax.plot(times, vals[:, 0], '-', label=r'$\alpha$')
-        ax.plot(times, vals[:, 3], '-', label=r'$Loss$')
+        # ax.plot(times, vals[:, 3], '-', label=r'$Loss$')
 
         plt.legend()
         plt.xlabel('k')
@@ -150,7 +153,7 @@ class Visualizer:
         # 2) plot w_k every N iterations
         t0, tf = 0., 2.
         u_min, u_max = -20., 20.
-        N = 10
+        N = self._n
         for k, step_cache in cache.items():
             if k % N == 0:
                 fig, ax = plt.subplots()
