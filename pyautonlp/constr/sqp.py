@@ -142,7 +142,7 @@ class SQP(ConstrainedSolver):
             grad_loss_x = self._grad_loss_x_fn(x_k)
             c_k = self._eval_constraints(x_k)
             constr_grad_x = self._eval_constraint_gradients(x_k)
-            d_k = self._solve_qp(B_k, grad_loss_x, c_k, constr_grad_x)
+            d_k = self._solve_qp(B_k, grad_loss_x, c_k, constr_grad_x, self._eq_mult_dims)
 
             # calculate step size (line search)
             alpha_k = self._step_size_fn(x_k=x_k, grad_loss_x=grad_loss_x, direction=d_k, max_iter=7)
@@ -192,20 +192,3 @@ class SQP(ConstrainedSolver):
         info = (converged, loss, k, self._cache)
 
         return x_k, info
-
-    def _solve_qp(self, B_k, grad_loss_x, c_k, constr_grad_x):
-        # convert to numpy
-        # TODO consider np.asarray()
-        G = np.array(B_k, dtype=np.double)
-        a = np.array(grad_loss_x, dtype=np.double)
-        b = np.array(c_k, dtype=np.double)
-        C = np.array(constr_grad_x, dtype=np.double)
-
-        # solve QP
-        xf, f, xu, iters, lagr, iact = solve_qp(G, a, C, b, meq=self._eq_mult_dims)
-
-        # translate back to JAX
-        d_k = jnp.array(np.concatenate((xf, lagr)))
-        d_k *= -1.
-
-        return d_k

@@ -1,7 +1,8 @@
 from typing import Tuple, Callable
-from collections import namedtuple
 
+import numpy as np
 import jax.numpy as jnp
+from quadprog import solve_qp
 
 from pyautonlp.constants import ConvergenceCriteria, LineSearch
 from pyautonlp.solver import Solver
@@ -170,3 +171,21 @@ class ConstrainedSolver(Solver):
             return self._gamma * alpha * direct_deriv
 
         return self._gamma * alpha * (direct_deriv - self._merit_adj(x))
+
+    @staticmethod
+    def _solve_qp(B_k, grad_loss_x, c_k, constr_grad_x, n_eq):
+        # convert to numpy
+        qd_G = np.array(B_k, dtype=np.double)
+        qd_a = np.array(grad_loss_x, dtype=np.double)
+        qd_b = np.array(c_k, dtype=np.double)
+        qd_C = np.array(constr_grad_x, dtype=np.double)
+
+        # solve QP
+        qd_xf, qd_f, qd_xu, qd_iters, qd_lagr, qd_iact = solve_qp(
+            qd_G, qd_a, qd_C, qd_b, meq=n_eq)  # , factorized=True
+
+        # translate back to JAX
+        d_k = jnp.array(np.concatenate((qd_xf, qd_lagr)))
+        d_k *= -1.
+
+        return d_k
