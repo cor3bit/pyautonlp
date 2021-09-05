@@ -42,6 +42,7 @@ class MultipleShooting(ConstrainedSolver):
             verbose: bool = False,
             visualize: bool = False,
             visualize_n: int = 10,
+            save_plot_dir: Optional[str] = None,
             **kwargs
     ):
         # logger
@@ -102,6 +103,7 @@ class MultipleShooting(ConstrainedSolver):
         # viz
         self._viz = visualize
         self._visualize_n = visualize_n
+        self._save_plot_dir = save_plot_dir
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
         if self._u_dims != 1:
@@ -136,10 +138,15 @@ class MultipleShooting(ConstrainedSolver):
         # run main SQP loop
         converged = False
         k = 0
+
+        self._log_param(k, 'n_steps', self._n_steps, display=False)
+        self._log_param(k, 'x0', self._x0, display=False)
+        self._log_param(k, 'xf', self._xf, display=False)
+
         while k < self._max_iter:
             # logging
             self._logger.info(f'---------------- Iteration {k} ----------------')
-            self._log_param(k, 'w', w_k, display=False)
+            # self._log_param(k, 'w', w_k, display=False)
 
             # given w_k, calculate evolution of x
             loss, grad_loss = self._ms_loss_fn(w_k, k, with_grads=True)
@@ -215,9 +222,11 @@ class MultipleShooting(ConstrainedSolver):
         # charts
         if self._viz:
             Visualizer(
+                solver_type=SolverType.MULT_SHOOTING,
                 solver_caches=[self._cache],
+                save_dir=self._save_plot_dir,
                 x1_bounds=(self._u_min, self._u_max),
-                n=self._visualize_n
+                n=self._visualize_n,
             ).plot_shooting()
 
         self._logger.info(f'Total solving time: {(perf_counter() - solve_t0) / 60.:.3f} min.')
@@ -290,6 +299,7 @@ class MultipleShooting(ConstrainedSolver):
         # convert w -> x, u
         # Note. w is flat, x is (n_steps+1)x(n_x), u is (n_steps)x(n_u)
         xs, us = self._split_by_x_u(w_k)
+        self._log_param(k, 'u', us, display=False)
 
         # initialize G(w) and grad_G(w) to be filled later
         c_eq_k_parts = [xs[0] - self._x0]

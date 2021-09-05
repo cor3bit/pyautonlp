@@ -43,6 +43,7 @@ class SingleShooting(ConstrainedSolver):
             verbose: bool = False,
             visualize: bool = False,
             visualize_n: int = 10,
+            save_plot_dir: Optional[str] = None,
             **kwargs
     ):
         # logger
@@ -104,6 +105,7 @@ class SingleShooting(ConstrainedSolver):
         # viz
         self._viz = visualize
         self._visualize_n = visualize_n
+        self._save_plot_dir = save_plot_dir
 
     def solve(self) -> Tuple[jnp.ndarray, Tuple]:
         if self._u_dims != 1:
@@ -148,10 +150,15 @@ class SingleShooting(ConstrainedSolver):
         # run main SQP loop
         converged = False
         k = 0
+
+        self._log_param(k, 'n_steps', self._n_steps, display=False)
+        self._log_param(k, 'x0', self._x0, display=False)
+        self._log_param(k, 'xf', self._xf, display=False)
+
         while k < self._max_iter:
             # logging
             self._logger.info(f'---------------- Iteration {k} ----------------')
-            self._log_param(k, 'w', w_k, display=False)
+            self._log_param(k, 'u', w_k, display=False)
             # self._log_param(k, 'm_eq', m_eq_k)
             # self._log_param(k, 'm_ineq', m_ineq_k)
 
@@ -198,7 +205,7 @@ class SingleShooting(ConstrainedSolver):
                 self._logger.warning(f'QP is infeasible! Failed with {e}.')
                 self._logger.info('Trying unbounded solver.')
 
-                d_k = self._solve_qp(B_k, grad_loss, c_eq_k, grad_c_eq_k.T)
+                d_k = self._solve_qp(B_k, grad_loss, c_eq_k, grad_c_eq_k.T, self._eq_mult_dims)
                 initial_alpha = self._u_max / jnp.max(jnp.abs(d_k))
 
                 # TODO return m_k
@@ -240,9 +247,13 @@ class SingleShooting(ConstrainedSolver):
 
         # charts
         if self._viz:
-            visualizer = Visualizer(solver_caches=[self._cache], x1_bounds=(self._u_min, self._u_max),
-                                    n=self._visualize_n)
-            visualizer.plot_shooting()
+            Visualizer(
+                solver_type=SolverType.SINGLE_SHOOTING,
+                solver_caches=[self._cache],
+                save_dir=self._save_plot_dir,
+                x1_bounds=(self._u_min, self._u_max),
+                n=self._visualize_n,
+            ).plot_shooting()
 
         self._logger.info(f'Total solving time: {(perf_counter() - solve_t0) / 60.:.3f} min.')
 

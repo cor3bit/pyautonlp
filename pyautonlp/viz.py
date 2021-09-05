@@ -1,4 +1,4 @@
-from typing import Dict, Tuple, Callable, List
+from typing import Dict, Tuple, Callable, List, Optional
 from itertools import product
 
 import numpy as np
@@ -16,6 +16,8 @@ class Visualizer:
             loss_fn: Callable = None,
             eq_constr: List[Callable] = None,
             ineq_constr: List[Callable] = None,
+            solver_type: Optional[str] = None,
+            save_dir: Optional[str] = None,
             solver_caches: List[Dict] = None,
             cache_names: List[str] = None,
             x1_bounds: Tuple[float, float] = (-1, 1),
@@ -38,6 +40,8 @@ class Visualizer:
         self._with_penalty_plot = with_penalty_plot
         self._separate = separate
         self._n = n
+        self._solver_type = solver_type
+        self._save_dir = save_dir
 
     def visualize(self):
         self.plot_convergence()
@@ -131,6 +135,16 @@ class Visualizer:
         assert len(self._solver_caches) == 1
         cache = self._solver_caches[0]
 
+        # extract meta data from cache
+        xf = cache[0]['xf']
+        if xf[0] == 2.:
+            scenario = 'a'
+        elif xf[0] == 1.:
+            scenario = 'c'
+        else:
+            scenario = 'b'
+        n_steps = cache[0]['n_steps']
+
         # 1) plot main time plot k vs. |g(x)|, |dLagrangian|, alpha
         fig, ax = plt.subplots()
         ax.set_yscale('log')
@@ -150,6 +164,9 @@ class Visualizer:
         plt.xlabel('k')
         plt.show()
 
+        if self._save_dir is not None:
+            fig.savefig(self._save_dir + f'{self._solver_type}_{scenario}_n{n_steps}_main.png')
+
         # 2) plot w_k every N iterations
         t0, tf = 0., 2.
         u_min, u_max = -20., 20.
@@ -158,7 +175,7 @@ class Visualizer:
             if k % N == 0:
                 fig, ax = plt.subplots()
 
-                w_k = np.array(step_cache['w'])
+                w_k = np.array(step_cache['u'])
                 w_k_dims = w_k.shape[0]
 
                 times = np.linspace(t0, tf, w_k_dims + 1)
@@ -173,6 +190,9 @@ class Visualizer:
                 plt.xlabel('$t$')
                 plt.ylabel('$u$')
                 plt.show()
+
+                if self._save_dir is not None:
+                    fig.savefig(self._save_dir + f'{self._solver_type}_{scenario}_n{n_steps}_i{k}.png')
 
         # 3) create gif of w_k evolution
         # TODO
