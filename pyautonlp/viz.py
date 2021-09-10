@@ -151,8 +151,8 @@ class Visualizer:
 
         times = np.fromiter(cache.keys(), dtype=float)
         vals = np.array([(
-            step_cache['alpha'], step_cache['c_eq_violation'],
-            step_cache['grad_Lagrangian'], step_cache['loss'],
+            step_cache['alpha'], step_cache['max_c_eq'],
+            step_cache['max_grad_Lagrangian'], step_cache['loss'],
         ) for step_cache in cache.values()])
 
         ax.plot(times, vals[:, 1], '-', label=r'$\left\Vert g\right\Vert _{\infty}$')

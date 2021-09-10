@@ -81,7 +81,7 @@ class MultipleShooting(ConstrainedSolver):
 
         # constraints
         # equality constraints on the last state x(N)
-        self._n_eq_mult = self._n_x * (self._n_steps + 1)
+        self._n_eq_mult = self._n_x * (self._n_steps + 2)
         self._logger.info(f'Dimensions of the equality multiplier vector g(w): {self._n_eq_mult}.')
 
         # inequality constraint (u_max and u_min) for each control variable
@@ -181,13 +181,14 @@ class MultipleShooting(ConstrainedSolver):
                 d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T, self._n_eq_mult)
                 # self._log_param(k, 'd', d_k[:self._w_dims])
             except Exception as e:
-                self._logger.warning('QP is infeasible! Trying a different solver.')
-                self._logger.warning(e)
+                self._logger.warning(f'QP is infeasible! Failed with {e}.')
+                self._logger.info('Trying unbounded solver.')
                 # TODO return m_k
                 # d_k = self._solve_infeasible_qp(B_k, grad_loss, c_eq_k, c_ineq_k, grad_c_eq_k, grad_c_ineq_k)
                 # self._log_param(k, 'd2', d_k)
 
-                raise NotImplementedError
+                # raise NotImplementedError
+                d_k = self._solve_qp(B_k, grad_loss, c_eq_k, grad_c_eq_k.T, self._n_eq_mult)
 
             self._log_param(k, 'max_d', jnp.max(d_k), save=False)
             self._log_param(k, 'min_d', jnp.min(d_k), save=False)
@@ -314,11 +315,9 @@ class MultipleShooting(ConstrainedSolver):
         # initialize G(w) and grad_G(w) to be filled later
         c_eq_k_parts = [xs[0] - self._x0]
 
-        diag_component = jnp.diag(jnp.ones((self._n_x,), jnp.float32))
+        diag_component = jnp.eye(self._n_x, dtype=jnp.float32)
         grad_c_eq_k = jnp.zeros((self._n_eq_mult, self._n_w), jnp.float32)
         grad_c_eq_k = grad_c_eq_k.at[:self._n_x, :self._n_x].set(diag_component)
-
-        dxdw_prev = jnp.zeros((self._n_x, self._n_w), jnp.float32)
 
         f_x = None
         for i, (t_start, t_end, x_i, x_j, u_i) in enumerate(zip(
@@ -335,26 +334,22 @@ class MultipleShooting(ConstrainedSolver):
             # fill G(w)
             c_eq_k_parts.append(f_x - x_j)
 
-            # fill previous steps
-            dxdw_next = G_x @ dxdw_prev
-
             # fill G_x, G_u
             ind_x_axis = i * (self._n_x + self._n_u)
-            dxdw_next = dxdw_next.at[:, ind_x_axis:ind_x_axis + self._n_x].set(G_x)
-            dxdw_next = dxdw_next.at[:, ind_x_axis + self._n_x].set(G_u)
-
             ind_y_axis = (i + 1) * self._n_x
-            grad_c_eq_k = grad_c_eq_k.at[ind_y_axis:ind_y_axis + self._n_x, :].set(dxdw_next)
+
+            grad_c_eq_k = grad_c_eq_k.at[ind_y_axis:ind_y_axis + self._n_x, ind_x_axis:ind_x_axis + self._n_x].set(G_x)
+            grad_c_eq_k = grad_c_eq_k.at[ind_y_axis:ind_y_axis + self._n_x, ind_x_axis + self._n_x].set(G_u)
 
             # fill diag(-1)
             diag_ind = ind_x_axis + self._n_x + self._n_u
             grad_c_eq_k = grad_c_eq_k.at[ind_y_axis:ind_y_axis + self._n_x, diag_ind:diag_ind + self._n_x].set(
                 -diag_component)
 
-            # update dxdw
-            dxdw_prev = dxdw_next
+        c_eq_k_parts.append(xs[-1] - self._xf)
+        grad_c_eq_k = grad_c_eq_k.at[-self._n_x:, -self._n_x:].set(diag_component)
 
-        self._log_param(k, 'x_N', f_x, save=False)
+        self._log_param(k, 'f_x_N', f_x, save=False)
         self._logger.info(f'Equality constraints evaluation finished in {perf_counter() - t1:.3f} sec.')
 
         return jnp.concatenate(c_eq_k_parts), grad_c_eq_k
@@ -378,6 +373,8 @@ class MultipleShooting(ConstrainedSolver):
 
             # fill G(w)
             c_eq_k_parts.append(f_x - x_j)
+
+        c_eq_k_parts.append(xs[-1] - self._xf)
 
         return jnp.concatenate(c_eq_k_parts)
 
@@ -498,8 +495,9 @@ class MultipleShooting(ConstrainedSolver):
 
         max_viol = jnp.maximum(max_c_eq, max_lagr_grad)
 
-        self._log_param(k, 'c_eq_violation', max_c_eq, save=True)
-        self._log_param(k, 'grad_Lagrangian', max_lagr_grad, save=True)
+        self._log_param(k, 'max_c_eq', max_c_eq, save=True)
+        self._log_param(k, 'max_grad_loss', jnp.max(jnp.abs(grad_loss)), save=False)
+        self._log_param(k, 'max_grad_Lagrangian', max_lagr_grad, save=True)
         self._log_param(k, 'penalty', max_viol)
 
         return max_viol <= self._tol

@@ -196,14 +196,15 @@ class SingleShooting(ConstrainedSolver):
             # TODO relax if infeasible
             try:
                 d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T, self._n_eq_mult)
-                initial_alpha = 1.
+                # initial_alpha = 1.
                 # self._log_param(k, 'd', d_k[:self._w_dims])
             except Exception as e:
                 self._logger.warning(f'QP is infeasible! Failed with {e}.')
                 self._logger.info('Trying unbounded solver.')
 
                 d_k = self._solve_qp(B_k, grad_loss, c_eq_k, grad_c_eq_k.T, self._n_eq_mult)
-                initial_alpha = self._u_max / jnp.max(jnp.abs(d_k))
+                # initial_alpha = 1.
+                # initial_alpha = self._u_max / jnp.max(jnp.abs(d_k))
 
                 # TODO return m_k
                 # d_k = self._solve_infeasible_qp(B_k, grad_loss, c_eq_k, c_ineq_k, grad_c_eq_k, grad_c_ineq_k)
@@ -213,11 +214,11 @@ class SingleShooting(ConstrainedSolver):
 
             self._log_param(k, 'max_d', jnp.max(d_k), save=False)
             self._log_param(k, 'min_d', jnp.min(d_k), save=False)
-            self._log_param(k, 'initial_alpha', initial_alpha, save=False)
+            # self._log_param(k, 'initial_alpha', initial_alpha, save=False)
 
             # calculate step size (line search)
             alpha_k = self._ss_backtrack(w_k=w_k, d_k=d_k, loss=loss, grad_loss=grad_loss,
-                                         x_i=x_i, initial_alpha=initial_alpha, max_iter=10)
+                                         x_i=x_i, max_iter=10)
 
             self._log_param(k, 'sigma', self._sigma)
             self._log_param(k, 'alpha', alpha_k)
@@ -496,9 +497,9 @@ class SingleShooting(ConstrainedSolver):
         # max_viol = jnp.maximum(jnp.maximum(max_c_eq, max_c_ineq), max_lagr_grad)
         max_viol = jnp.maximum(max_c_eq, max_lagr_grad)
 
-        self._log_param(k, 'c_eq_violation', max_c_eq)
+        self._log_param(k, 'max_c_eq', max_c_eq)
         # self._log_param(k, 'c_ineq_violation', max_c_ineq, save=True)
-        self._log_param(k, 'grad_Lagrangian', max_lagr_grad)
+        self._log_param(k, 'max_grad_Lagrangian', max_lagr_grad)
         self._log_param(k, 'penalty', max_viol)
 
         return max_viol <= self._tol
