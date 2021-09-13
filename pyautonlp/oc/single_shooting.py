@@ -184,7 +184,6 @@ class SingleShooting(ConstrainedSolver):
             grad_c_k = jnp.vstack([grad_c_eq_k, grad_c_ineq_k])
 
             # TODO REMOVE, DEBUG-ONLY
-            # np_R = np.array(R)
             # np_Jac_R = np.array(Jac_R)
             # np_B_k = np.array(B_k)
             # np_grad_loss = np.array(grad_loss)
@@ -280,6 +279,7 @@ class SingleShooting(ConstrainedSolver):
         Jac_R = jnp.zeros((self._n_r, self._n_w), jnp.float32) if with_grads else None
         dxdw_prev = jnp.zeros((self._n_x, self._n_w), jnp.float32) if with_grads else None
         sqrt_x_pen = jnp.sqrt(self._x_pen)
+        sqrt_x_pen_array = jnp.repeat(sqrt_x_pen, self._n_w).reshape((self._n_x, self._n_w))
         sqrt_u_pen = jnp.sqrt(self._u_pen.reshape((-1,)))
 
         # convert w -> u
@@ -293,8 +293,6 @@ class SingleShooting(ConstrainedSolver):
                                      method=IntegrateMethod.RK4, with_grads=True,
                                      dfds_fn=dfds_fn, dfdu_fn=dfdu_fn)
             x_j = x_full[-1]
-            G_x = info['G_x']
-            G_u = info['G_u'].reshape((-1))
 
             # DEBUG-ONLY: Check sensitivities with AD
             # x1, G_x1, G_u1 = integrate_with_ad(self._dynamics, x_i, u_i, time_grid_integration,
@@ -310,22 +308,20 @@ class SingleShooting(ConstrainedSolver):
             R.append(loss_u_i)
 
             if with_grads:
+                G_x = info['G_x']
+                G_u = info['G_u'].reshape((-1))
+
                 # Jac_R components: chain rule, one row at a time
-                diag_component = G_u * sqrt_x_pen
+                diag_component = G_u
                 dxdw_next = G_x @ dxdw_prev
                 dxdw_next = dxdw_next.at[:, i].set(diag_component)
 
                 start_ind = (i + 1) * (self._n_x + self._n_u)
                 end_ind = start_ind + self._n_x
-                Jac_R = Jac_R.at[start_ind:end_ind, :].set(dxdw_next)
+                Jac_R = Jac_R.at[start_ind:end_ind, :].set(dxdw_next * sqrt_x_pen_array)
 
                 # fill du_k/du_k
                 Jac_R = Jac_R.at[start_ind - 1:start_ind - 1 + self._n_u, i].set(sqrt_u_pen)
-
-                # TODO REMOVE, DEBUG-ONLY
-                # np_dxdw_prev = np.array(dxdw_prev)
-                # np_dxdw_next = np.array(dxdw_next)
-                # np_G_x = np.array(G_x)
 
                 # update dxdw
                 dxdw_prev = dxdw_next
