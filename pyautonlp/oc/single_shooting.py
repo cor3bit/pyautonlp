@@ -195,25 +195,20 @@ class SingleShooting(ConstrainedSolver):
             # TODO relax if infeasible
             try:
                 d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T, self._n_eq_mult)
-                # initial_alpha = 1.
-                # self._log_param(k, 'd', d_k[:self._w_dims])
             except Exception as e:
                 self._logger.warning(f'QP is infeasible! Failed with {e}.')
+
                 self._logger.info('Trying unbounded solver.')
-
                 d_k = self._solve_qp(B_k, grad_loss, c_eq_k, grad_c_eq_k.T, self._n_eq_mult)
-                # initial_alpha = 1.
-                # initial_alpha = self._u_max / jnp.max(jnp.abs(d_k))
+                self._log_param(k, 'max_d', jnp.max(d_k), save=False)
+                self._log_param(k, 'min_d', jnp.min(d_k), save=False)
 
-                # TODO return m_k
-                # d_k = self._solve_infeasible_qp(B_k, grad_loss, c_eq_k, c_ineq_k, grad_c_eq_k, grad_c_ineq_k)
-                # self._log_param(k, 'd2', d_k)
-
-                # raise NotImplementedError
+                self._logger.info('Trying infeasibility minimization.')
+                d_k = self._solve_infeasible_qp(B_k, grad_loss, c_eq_k, c_ineq_k,
+                                                grad_c_eq_k, grad_c_ineq_k)
 
             self._log_param(k, 'max_d', jnp.max(d_k), save=False)
             self._log_param(k, 'min_d', jnp.min(d_k), save=False)
-            # self._log_param(k, 'initial_alpha', initial_alpha, save=False)
 
             # calculate step size (line search)
             alpha_k = self._ss_backtrack(w_k=w_k, d_k=d_k, loss=loss, grad_loss=grad_loss,
@@ -376,34 +371,6 @@ class SingleShooting(ConstrainedSolver):
         c_ineq_k = self._eval_ineq_constraints(x, **kwargs)
         return jnp.concatenate([c_eq_k, c_ineq_k])
 
-    def _solve_infeasible_qp(
-            self,
-            B_k: jnp.ndarray,
-            grad_loss_x: jnp.ndarray,
-            c_eq_k: jnp.ndarray,
-            c_ineq_k: jnp.ndarray,
-            grad_c_eq_k: jnp.ndarray,
-            grad_c_ineq_k: jnp.ndarray,
-            solver_id: str = 'quadprog',
-    ) -> jnp.ndarray:
-        # convert to numpy
-        P = np.array(B_k, dtype=np.double)
-        q = -np.array(grad_loss_x, dtype=np.double)
-
-        A = np.array(grad_c_eq_k, dtype=np.double)
-        b = -np.array(c_eq_k, dtype=np.double)
-
-        G = np.array(grad_c_ineq_k, dtype=np.double)
-        h = -np.array(c_ineq_k, dtype=np.double)
-
-        # solve QP
-        d_k = qpsolvers.solve_qp(P, q, G, h, A, b, solver=solver_id, verbose=True)
-        d_k *= -1.
-
-        # TODO extract other info
-
-        return d_k
-
     def _ss_backtrack(
             self,
             w_k: jnp.ndarray,
@@ -495,6 +462,10 @@ class SingleShooting(ConstrainedSolver):
 
         self._log_param(k, 'max_c_eq', max_c_eq)
         # self._log_param(k, 'c_ineq_violation', max_c_ineq, save=True)
+
+        self._log_param(k, 'max_grad_loss', jnp.max(jnp.abs(grad_loss)), save=False)
+        # self._log_param(k, 'max_grad_c_eq_times_lambda', jnp.max(jnp.abs(m_eq_k @ grad_c_eq_k)), save=False)
+
         self._log_param(k, 'max_grad_Lagrangian', max_lagr_grad)
         self._log_param(k, 'penalty', max_viol)
 

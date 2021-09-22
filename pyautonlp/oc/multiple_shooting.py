@@ -179,16 +179,17 @@ class MultipleShooting(ConstrainedSolver):
             # TODO relax if infeasible
             try:
                 d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T, self._n_eq_mult)
-                # self._log_param(k, 'd', d_k[:self._w_dims])
             except Exception as e:
                 self._logger.warning(f'QP is infeasible! Failed with {e}.')
-                self._logger.info('Trying unbounded solver.')
-                # TODO return m_k
-                # d_k = self._solve_infeasible_qp(B_k, grad_loss, c_eq_k, c_ineq_k, grad_c_eq_k, grad_c_ineq_k)
-                # self._log_param(k, 'd2', d_k)
 
-                # raise NotImplementedError
+                self._logger.info('Trying unbounded solver.')
                 d_k = self._solve_qp(B_k, grad_loss, c_eq_k, grad_c_eq_k.T, self._n_eq_mult)
+                self._log_param(k, 'max_d', jnp.max(d_k), save=False)
+                self._log_param(k, 'min_d', jnp.min(d_k), save=False)
+
+                self._logger.info('Trying infeasibility minimization.')
+                d_k = self._solve_infeasible_qp(B_k, grad_loss, c_eq_k, c_ineq_k,
+                                                grad_c_eq_k, grad_c_ineq_k)
 
             self._log_param(k, 'max_d', jnp.max(d_k), save=False)
             self._log_param(k, 'min_d', jnp.min(d_k), save=False)

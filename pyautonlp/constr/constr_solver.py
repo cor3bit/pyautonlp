@@ -189,3 +189,58 @@ class ConstrainedSolver(Solver):
         d_k *= -1.
 
         return d_k
+
+    def _solve_infeasible_qp(
+            self,
+            B_k: jnp.ndarray,
+            grad_loss_x: jnp.ndarray,
+            c_eq_k: jnp.ndarray,
+            c_ineq_k: jnp.ndarray,
+            grad_c_eq_k: jnp.ndarray,
+            grad_c_ineq_k: jnp.ndarray,
+            rho: float = 5.,
+    ) -> jnp.ndarray:
+        # modify matrices for soft constraints
+        n_w = self._n_w
+        n_g = self._n_eq_mult
+        n_h = self._n_ineq_mult
+        n_s = 2 * n_g + n_h
+
+        new_B_k = jnp.block([
+            [B_k, jnp.zeros((n_w, n_s))],
+            [jnp.zeros((n_s, n_w)), rho * jnp.eye(n_s)],
+        ])
+
+        new_grad_loss_x = jnp.concatenate([grad_loss_x, jnp.zeros((n_s,))])
+
+        new_c_k = jnp.concatenate([c_eq_k, c_ineq_k, jnp.zeros((n_s,))])
+
+        n_g_prev = grad_c_eq_k.shape[0]
+        n_h_prev = grad_c_ineq_k.shape[0]
+
+        new_constr_grad_x = jnp.block([
+            [grad_c_eq_k, -jnp.ones((n_g_prev, n_g)), jnp.ones((n_g_prev, n_g)), jnp.zeros((n_g_prev, n_h))],
+            [grad_c_ineq_k, jnp.zeros((n_h_prev, 2 * n_g)), -jnp.ones((n_h_prev, n_h))],
+            [jnp.zeros((n_s, n_w)), -jnp.eye(n_s)],
+        ])
+
+        # TODO remove numpy debug
+        # np_new_B_k = np.array(new_B_k)
+        # np_new_grad_loss_x = np.array(new_grad_loss_x)
+        # np_new_c_k = np.array(new_c_k)
+        # np_new_constr_grad_x = np.array(new_constr_grad_x)
+
+        # solve QP
+        d_k = self._solve_qp(
+            new_B_k,
+            new_grad_loss_x,
+            new_c_k,
+            new_constr_grad_x.T,
+            self._n_eq_mult,
+        )
+
+        # re-assemble to remove slack var info
+        d_k_w = d_k[:n_w]
+        d_k_lagr = d_k[n_w + n_s: n_w + n_s + n_g_prev + n_h_prev]
+
+        return jnp.concatenate([d_k_w, d_k_lagr])
