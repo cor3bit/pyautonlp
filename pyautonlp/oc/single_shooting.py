@@ -210,11 +210,15 @@ class SingleShooting(ConstrainedSolver):
             self._log_param(k, 'max_d', jnp.max(d_k), save=False)
             self._log_param(k, 'min_d', jnp.min(d_k), save=False)
 
+            # TODO expiremental sigma
+            self._adjust_sigma(grad_loss, d_k, c_eq_k, B_k)
+            self._log_param(k, 'sigma', self._sigma)
+
             # calculate step size (line search)
             alpha_k = self._ss_backtrack(w_k=w_k, d_k=d_k, loss=loss, grad_loss=grad_loss,
                                          x_i=x_i, max_iter=10)
 
-            self._log_param(k, 'sigma', self._sigma)
+            # self._log_param(k, 'sigma', self._sigma)
             self._log_param(k, 'alpha', alpha_k)
 
             # update controls and multipliers
@@ -225,7 +229,7 @@ class SingleShooting(ConstrainedSolver):
             # m_ineq_k = (1 - alpha_k) * m_ineq_k + alpha_k * d_k[m_eq_ind_end:]
 
             # self._sigma = jnp.max(jnp.abs(jnp.concatenate([m_eq_k, m_ineq_k]))) + 0.1
-            self._sigma = jnp.max(jnp.abs(m_eq_k)) + 0.1
+            # self._sigma = jnp.max(jnp.abs(m_eq_k)) + 0.1
 
             # increment counter
             k += 1
@@ -371,6 +375,28 @@ class SingleShooting(ConstrainedSolver):
         c_ineq_k = self._eval_ineq_constraints(x, **kwargs)
         return jnp.concatenate([c_eq_k, c_ineq_k])
 
+    def _adjust_sigma(
+            self,
+            grad_loss: jnp.ndarray,
+            d_k: jnp.ndarray,
+            c_eq_k: jnp.ndarray,
+            B_k: jnp.ndarray,
+            rho: float = 0.1,
+            eps: float = 0.01,
+    ):
+        d_w = d_k[:self._n_w]
+        s_num = jnp.dot(grad_loss, d_w) + 0.5 * d_w.T @ B_k @ d_w
+        s_den = (1 - rho) * jnp.linalg.norm(c_eq_k, ord=1)
+        sigma_barrier = s_num / s_den
+        sigma = sigma_barrier + eps
+        # self._sigma = jnp.maximum(1., sigma)
+        # if sigma < 0:
+        #     sigma = eps
+
+        sigma = jnp.maximum(1., sigma)
+
+        self._sigma = sigma
+
     def _ss_backtrack(
             self,
             w_k: jnp.ndarray,
@@ -390,12 +416,18 @@ class SingleShooting(ConstrainedSolver):
 
         curr_loss = loss
         curr_merit_adj = self._ss_merit_adj(w_k, x_i)
+        armijo_adj = self._ss_armijo_adj(alpha, direction_w, grad_loss, curr_merit_adj)
+
+        # self._log_param(0, 'L_k', curr_loss, save=False)
+        # self._log_param(0, 'M_k', curr_merit_adj, save=False)
+        # self._log_param(0, 'A_k', armijo_adj, save=False)
 
         next_w_k = w_k + alpha * direction_w
         next_loss, next_x_i = self._loss_fn(next_w_k)
         next_merit_adj = self._ss_merit_adj(next_w_k, next_x_i)
 
-        armijo_adj = self._ss_armijo_adj(w_k, alpha, direction_w, grad_loss, x_i)
+        # self._log_param(0, 'L_{k+1}', next_loss, save=False)
+        # self._log_param(0, 'M_{k+1}', next_merit_adj, save=False)
 
         n_iter = 0
         while (next_loss + next_merit_adj >= curr_loss + curr_merit_adj + armijo_adj) and (n_iter < max_iter):
@@ -408,6 +440,10 @@ class SingleShooting(ConstrainedSolver):
             next_w_k = w_k + alpha * direction_w
             next_loss, next_x_i = self._loss_fn(next_w_k)
             next_merit_adj = self._ss_merit_adj(next_w_k, next_x_i)
+
+            # self._log_param(0, 'A_k', armijo_adj, save=False)
+            # self._log_param(0, 'L_{k+1}', next_loss, save=False)
+            # self._log_param(0, 'M_{k+1}', next_merit_adj, save=False)
 
             n_iter += 1
 
@@ -435,14 +471,12 @@ class SingleShooting(ConstrainedSolver):
 
     def _ss_armijo_adj(
             self,
-            w_k: jnp.ndarray,
             alpha: float,
             direction_w: jnp.ndarray,
             grad_loss: jnp.ndarray,
-            x_i: jnp.ndarray,
+            merit_adj: float,
     ) -> float:
-        direct_deriv = jnp.dot(grad_loss, direction_w)
-        return self._gamma * alpha * (direct_deriv - self._ss_merit_adj(w_k, x_i))
+        return self._gamma * alpha * (jnp.dot(grad_loss, direction_w) - merit_adj)
 
     def _ss_converged(
             self,

@@ -198,7 +198,7 @@ class ConstrainedSolver(Solver):
             c_ineq_k: jnp.ndarray,
             grad_c_eq_k: jnp.ndarray,
             grad_c_ineq_k: jnp.ndarray,
-            rho: float = 5.,
+            rho: float = 10,
     ) -> jnp.ndarray:
         # modify matrices for soft constraints
         n_w = self._n_w
