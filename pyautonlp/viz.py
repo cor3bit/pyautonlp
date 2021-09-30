@@ -150,15 +150,18 @@ class Visualizer:
         ax.set_yscale('log')
 
         times = np.fromiter(cache.keys(), dtype=float)
+
         vals = np.array([(
-            step_cache['alpha'], step_cache['max_c_eq'],
-            step_cache['max_grad_Lagrangian'], step_cache['loss'],
+            step_cache['max_c_eq'],
+            step_cache['max_grad_Lagrangian'],
+            step_cache['loss'],
+            step_cache['alpha'] if 'alpha' in step_cache else None,
         ) for step_cache in cache.values()])
 
-        ax.plot(times, vals[:, 1], '-', label=r'$\left\Vert g\right\Vert _{\infty}$')
-        ax.plot(times, vals[:, 2], '-', label=r'$\left\Vert \nabla_{x}\mathcal{L}\right\Vert _{\infty}$')
-        ax.plot(times, vals[:, 0], '-', label=r'$\alpha$')
-        # ax.plot(times, vals[:, 3], '-', label=r'$Loss$')
+        ax.plot(times, vals[:, 0], '-', label=r'$\left\Vert g\right\Vert _{\infty}$')
+        ax.plot(times, vals[:, 1], '-', label=r'$\left\Vert \nabla_{x}\mathcal{L}\right\Vert _{\infty}$')
+        ax.plot(times[:-1], vals[:-1, 3], '-', label=r'$\alpha$')
+        # ax.plot(times, vals[:, 2], '-', label=r'$Loss$')
 
         plt.legend()
         plt.xlabel('k')

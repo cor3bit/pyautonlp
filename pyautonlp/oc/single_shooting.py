@@ -173,15 +173,15 @@ class SingleShooting(ConstrainedSolver):
             b = jnp.repeat(sqrt_x_pen, self._n_w).reshape((self._n_x, self._n_w))
             grad_c_eq_k = a / b
 
-            converged = self._ss_converged(k, grad_loss, m_eq_k, c_eq_k, grad_c_eq_k)
+            converged = self._ss_converged(k, grad_loss, m_eq_k, c_eq_k, grad_c_eq_k,
+                                           m_ineq_k, c_ineq_k, grad_c_ineq_k)
 
-            # TODO check that breaks the loop
             if converged:
                 break
 
             # find direction by solving QP
-            c_k = jnp.concatenate([c_eq_k, c_ineq_k])
-            grad_c_k = jnp.vstack([grad_c_eq_k, grad_c_ineq_k])
+            # c_k = jnp.concatenate([c_eq_k, c_ineq_k])
+            # grad_c_k = jnp.vstack([grad_c_eq_k, grad_c_ineq_k])
 
             # TODO REMOVE, DEBUG-ONLY
             # np_Jac_R = np.array(Jac_R)
@@ -194,7 +194,9 @@ class SingleShooting(ConstrainedSolver):
 
             # TODO relax if infeasible
             try:
-                d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T, self._n_eq_mult)
+                # d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T, self._n_eq_mult)
+                d_k = self._solve_qp_cvxopt(B_k, grad_loss, c_eq_k, c_ineq_k,
+                                            grad_c_eq_k, grad_c_ineq_k)
             except Exception as e:
                 self._logger.warning(f'QP is infeasible! Failed with {e}.')
 
@@ -211,7 +213,7 @@ class SingleShooting(ConstrainedSolver):
             self._log_param(k, 'min_d', jnp.min(d_k), save=False)
 
             # TODO expiremental sigma
-            self._adjust_sigma(grad_loss, d_k, c_eq_k, B_k)
+            # self._adjust_sigma(grad_loss, d_k, c_eq_k, B_k)
             self._log_param(k, 'sigma', self._sigma)
 
             # calculate step size (line search)
@@ -226,9 +228,9 @@ class SingleShooting(ConstrainedSolver):
 
             m_eq_ind_end = self._n_w + self._n_eq_mult
             m_eq_k = (1 - alpha_k) * m_eq_k + alpha_k * d_k[self._n_w:m_eq_ind_end]
-            # m_ineq_k = (1 - alpha_k) * m_ineq_k + alpha_k * d_k[m_eq_ind_end:]
+            m_ineq_k = (1 - alpha_k) * m_ineq_k + alpha_k * d_k[m_eq_ind_end:]
 
-            # self._sigma = jnp.max(jnp.abs(jnp.concatenate([m_eq_k, m_ineq_k]))) + 0.1
+            self._sigma = jnp.max(jnp.abs(jnp.concatenate([m_eq_k, m_ineq_k]))) + 0.1
             # self._sigma = jnp.max(jnp.abs(m_eq_k)) + 0.1
 
             # increment counter
@@ -485,21 +487,25 @@ class SingleShooting(ConstrainedSolver):
             m_eq_k: jnp.ndarray,
             c_eq_k: jnp.ndarray,
             grad_c_eq_k: jnp.ndarray,
+            m_ineq_k: jnp.ndarray,
+            c_ineq_k: jnp.ndarray,
+            grad_c_ineq_k: jnp.ndarray,
     ) -> bool:
         max_c_eq = jnp.max(jnp.abs(c_eq_k))
-        # max_c_ineq = jnp.max(jnp.clip(c_ineq_k, a_min=0))
-        grad_lagr = grad_loss + m_eq_k @ grad_c_eq_k  # + m_ineq_k @ grad_c_ineq_k
-        max_lagr_grad = jnp.max(jnp.abs(grad_lagr))
+        max_c_ineq = jnp.max(jnp.clip(c_ineq_k, a_min=0))
+        grad_lagr = grad_loss + m_eq_k @ grad_c_eq_k + m_ineq_k @ grad_c_ineq_k
 
-        # max_viol = jnp.maximum(jnp.maximum(max_c_eq, max_c_ineq), max_lagr_grad)
-        max_viol = jnp.maximum(max_c_eq, max_lagr_grad)
+        # self._logger.info(f'm_eq_k: {m_eq_k}')
+        # self._logger.info(f'm_ineq_k: {m_ineq_k}')
+        # self._logger.info(f'grad_c_eq_k: {grad_c_eq_k}')
+        # self._logger.info(f'grad_c_ineq_k: {grad_c_ineq_k}')
+
+        max_lagr_grad = jnp.max(jnp.abs(grad_lagr))
+        max_viol = jnp.maximum(jnp.maximum(max_c_eq, max_c_ineq), max_lagr_grad)
 
         self._log_param(k, 'max_c_eq', max_c_eq)
-        # self._log_param(k, 'c_ineq_violation', max_c_ineq, save=True)
-
-        self._log_param(k, 'max_grad_loss', jnp.max(jnp.abs(grad_loss)), save=False)
-        # self._log_param(k, 'max_grad_c_eq_times_lambda', jnp.max(jnp.abs(m_eq_k @ grad_c_eq_k)), save=False)
-
+        self._log_param(k, 'max_c_ineq', max_c_ineq)
+        # self._log_param(k, 'max_grad_loss', jnp.max(jnp.abs(grad_loss)), save=False)
         self._log_param(k, 'max_grad_Lagrangian', max_lagr_grad)
         self._log_param(k, 'penalty', max_viol)
 

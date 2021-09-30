@@ -3,6 +3,8 @@ from typing import Tuple, Callable
 import numpy as np
 import jax.numpy as jnp
 from quadprog import solve_qp
+from cvxopt import matrix, spmatrix
+from cvxopt.solvers import options, qp
 
 from pyautonlp.constants import ConvergenceCriteria, LineSearch
 from pyautonlp.solver import Solver
@@ -187,6 +189,46 @@ class ConstrainedSolver(Solver):
         # translate back to JAX
         d_k = jnp.array(np.concatenate((qd_xf, qd_lagr)))
         d_k *= -1.
+
+        return d_k
+
+    @staticmethod
+    def _solve_qp_cvxopt(
+            B_k,
+            grad_loss_x,
+            c_eq_k,
+            c_ineq_k,
+            grad_c_eq_k,
+            grad_c_ineq_k,
+            verbose=False,
+    ):
+        # convert to numpy
+        # loss and grad loss
+        P = matrix(np.array(B_k, dtype=np.double))
+        q = matrix(np.array(grad_loss_x, dtype=np.double))
+
+        # equality part
+        A = matrix(np.array(grad_c_eq_k, dtype=np.double))
+        b = matrix(np.array(-c_eq_k, dtype=np.double))
+
+        # inequality part
+        G = matrix(np.array(grad_c_ineq_k, dtype=np.double))
+        h = matrix(np.array(-c_ineq_k, dtype=np.double))
+
+        # set CVX internal param
+        options['show_progress'] = verbose
+
+        # solve QP
+        sol = qp(P, q, G, h, A, b)
+        if 'optimal' not in sol['status']:
+            # TODO infeasibility
+            raise NotImplementedError
+
+        x_k = np.squeeze(sol['x'])
+        lambda_k = np.squeeze(sol['y'])
+        mu_k = np.squeeze(sol['z'])
+
+        d_k = jnp.concatenate((x_k, lambda_k, mu_k))
 
         return d_k
 
