@@ -51,7 +51,7 @@ class MultipleShooting(ConstrainedSolver):
         self._logger.info(f'Initializing solver.')
 
         # oc params
-        self._dynamics = dynamics
+        self._dynamics = jit(dynamics)
         self._t0 = t0
         self._tf = tf
         self._x0 = x0
@@ -163,10 +163,6 @@ class MultipleShooting(ConstrainedSolver):
                 self._logger.info(f'Converged after {k} iterations!')
                 break
 
-            # find direction by solving QP
-            c_k = jnp.concatenate([c_eq_k, c_ineq_k])
-            grad_c_k = jnp.vstack([grad_c_eq_k, grad_c_ineq_k])
-
             # TODO REMOVE, DEBUG-ONLY
             # np_B_k = np.array(B_k)
             # np_grad_loss = np.array(grad_loss)
@@ -177,9 +173,10 @@ class MultipleShooting(ConstrainedSolver):
             # np_c_k = np.array(c_k)
             # np_grad_c_k = np.array(grad_c_k)
 
-            # TODO relax if infeasible
+            # find direction by solving QP
             try:
-                d_k = self._solve_qp(B_k, grad_loss, c_k, grad_c_k.T, self._n_eq_mult)
+                d_k = self._solve_qp_cvxopt(B_k, grad_loss, c_eq_k, c_ineq_k,
+                                            grad_c_eq_k, grad_c_ineq_k)
             except Exception as e:
                 self._logger.warning(f'QP is infeasible! Failed with {e}.')
 
@@ -196,7 +193,7 @@ class MultipleShooting(ConstrainedSolver):
             self._log_param(k, 'min_d', jnp.min(d_k), save=False)
 
             # TODO expiremental sigma
-            self._adjust_sigma(m_eq_k, m_ineq_k, grad_loss, d_k, c_eq_k, B_k)
+            # self._adjust_sigma(m_eq_k, m_ineq_k, grad_loss, d_k, c_eq_k, B_k)
             self._log_param(k, 'sigma', self._sigma)
 
             # calculate step size (line search)
@@ -211,9 +208,9 @@ class MultipleShooting(ConstrainedSolver):
 
             m_eq_ind_end = self._n_w + self._n_eq_mult
             m_eq_k = (1 - alpha_k) * m_eq_k + alpha_k * d_k[self._n_w:m_eq_ind_end]
-            # m_ineq_k = (1 - alpha_k) * m_ineq_k + alpha_k * d_k[m_eq_ind_end:]
+            m_ineq_k = (1 - alpha_k) * m_ineq_k + alpha_k * d_k[m_eq_ind_end:]
 
-            # self._sigma = jnp.max(jnp.abs(jnp.concatenate([m_eq_k, m_ineq_k]))) + 0.1
+            self._sigma = jnp.max(jnp.abs(jnp.concatenate([m_eq_k, m_ineq_k]))) + 0.1
 
             # increment counter
             k += 1
@@ -503,10 +500,11 @@ class MultipleShooting(ConstrainedSolver):
 
         eq_norm = jnp.linalg.norm(c_eq_k, ord=1)
 
-        ineq_norm = 0.
+        # ineq_norm = 0.
         # TODO skips inequality adjustment
-        # c_ineq_k = self._eval_ineq_constraints(x=w_k)
-        # ineq_norm = jnp.linalg.norm(jnp.clip(c_ineq_k, a_min=0), ord=1)
+
+        c_ineq_k = self._eval_ineq_constraints(x=w_k)
+        ineq_norm = jnp.linalg.norm(jnp.clip(c_ineq_k, a_min=0), ord=1)
 
         return self._sigma * (eq_norm + ineq_norm)
 

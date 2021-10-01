@@ -3,10 +3,8 @@ from time import perf_counter
 from typing import List, Tuple, Callable, Optional, Union
 from functools import partial
 
-import numpy as np
 import jax.numpy as jnp
 from jax import grad, jacfwd, jit
-import qpsolvers
 
 from pyautonlp.constants import *
 from pyautonlp.viz import Visualizer
@@ -51,7 +49,7 @@ class SingleShooting(ConstrainedSolver):
         self._logger.info(f'Initializing solver.')
 
         # oc params
-        self._dynamics = dynamics
+        self._dynamics = jit(dynamics)
         self._t0 = t0
         self._tf = tf
         self._x0 = x0
@@ -464,10 +462,11 @@ class SingleShooting(ConstrainedSolver):
         c_eq_k = self._eval_eq_constraints(x=w_k, x_i=x_i)
         eq_norm = jnp.linalg.norm(c_eq_k, ord=1)
 
-        ineq_norm = 0.
+        # ineq_norm = 0.
         # TODO skips inequality adjustment
-        # c_ineq_k = self._eval_ineq_constraints(x=w_k)
-        # ineq_norm = jnp.linalg.norm(jnp.clip(c_ineq_k, a_min=0), ord=1)
+
+        c_ineq_k = self._eval_ineq_constraints(x=w_k)
+        ineq_norm = jnp.linalg.norm(jnp.clip(c_ineq_k, a_min=0), ord=1)
 
         return self._sigma * (eq_norm + ineq_norm)
 
