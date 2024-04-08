@@ -53,7 +53,7 @@ class ConstrainedSolver(Solver):
 
     def _eval_eq_constraint_gradients(self, x):
         # should return size NxM_g matrix
-        eq_constr_grads = jnp.empty((self._n_x, self._eq_mult_dims), dtype=jnp.float32)
+        eq_constr_grads = jnp.empty((self._x_dims, self._eq_mult_dims), dtype=jnp.float32)
 
         for j, c_grad_fn in enumerate(self._grad_constr_x_fns[:self._eq_mult_dims]):
             eq_constr_grads = eq_constr_grads.at[:, j].set(c_grad_fn(x))
@@ -62,7 +62,7 @@ class ConstrainedSolver(Solver):
 
     def _eval_constraint_gradients(self, x):
         # should return size NxM matrix
-        constraint_grads = jnp.empty((self._n_x, self._multiplier_dims), dtype=jnp.float32)
+        constraint_grads = jnp.empty((self._x_dims, self._multiplier_dims), dtype=jnp.float32)
 
         for j, c_grad_fn in enumerate(self._grad_constr_x_fns):
             constraint_grads = constraint_grads.at[:, j].set(c_grad_fn(x))
@@ -131,7 +131,7 @@ class ConstrainedSolver(Solver):
             **kwargs
     ):
         alpha = initial_alpha
-        direction_x = direction[:self._n_x]
+        direction_x = direction[:self._x_dims]
         loss_eval_fn = self._merit_fn if self._merit else self._loss_fn
 
         curr_loss = loss_eval_fn(x_k)

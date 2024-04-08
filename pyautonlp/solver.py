@@ -10,7 +10,7 @@ from pyautonlp.constants import Direction, HessianRegularization
 class Solver(ABC):
     _logger = None
     _loss_fn = None
-    _n_x = None
+    _x_dims = None
     _step_cache = None  # info collected during the step
     _cache = None  # full info collected during the run
 
@@ -66,7 +66,7 @@ class Solver(ABC):
 
     def _hessian_bfgs_approx(self, B_prev, g_k, g_prev, x_k, x_prev, **kwargs) -> jnp.ndarray:
         if B_prev is None:
-            return jnp.eye(N=self._n_x)  # B_0
+            return jnp.eye(N=self._x_dims)  # B_0
         else:
             y = x_k - x_prev
             s = g_k - g_prev
@@ -90,7 +90,7 @@ class Solver(ABC):
         return jnp.outer(g_k, g_k)
 
     def _hessian_sd_approx(self, **kwargs) -> jnp.ndarray:
-        return jnp.eye(N=self._n_x)
+        return jnp.eye(N=self._x_dims)
 
     def _regularize_hessian(self, B_k, constr_grad_x):
         B_k_is_pd = True
